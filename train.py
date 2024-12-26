@@ -3,6 +3,7 @@ import logging
 import itertools
 import torch
 from torch import nn
+import wandb
 from matplotlib import pyplot as plt
 from dataset import GameDataset
 from model import NeuralNetwork
@@ -14,11 +15,12 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available(
 LOG_FILE_PATH = 'logs/logs_hps.log'
 PLOT_FOLDER = 'plots'
 CHECKPOINT_FOLDER = 'checkpoints'
-#TRAIN_DATA_PATH = "data_pt/train_data_big.pt"
-TRAIN_DATA_PATH =  "data_pt/validation_data_big.pt"
-VAL_DATA_PATH = "data_pt/validation_data_big.pt"
+# TRAIN_DATA_PATH = "../train_data_big.pt"
+TRAIN_DATA_PATH =  "../validation_data_big.pt"
+VAL_DATA_PATH =  "../validation_data_big.pt"
 
-
+wandb.login()
+torch.set_float32_matmul_precision("high")
 
 def setup_logger(log_file_path):
     logger = logging.getLogger()
@@ -112,12 +114,19 @@ def train(
     test_generator = torch.utils.data.DataLoader(
         test_set, batch_size=batch_size, shuffle=True)
 
+    print(board_size)
+    print(n_size)
+    print(num_layer)
     model = NeuralNetwork(board_size, n_size, num_layer).to(DEVICE)
+    start = time.time()
+    model = torch.compile(model)
+    stop = time.time()
+    print(f"copmile took {stop-start}")
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(
+    optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=learning_rate,
-        weight_decay=1e-4)
+        fused=True)
 
     losses, losses_avg, accuracies, t_losses, t_accuracies = [], [], [], [], []
     fn = f"{n_size}ns_{num_layer}ls_{learning_rate}lr_{epoch}ep_{batch_size}bs"
@@ -131,17 +140,20 @@ def train(
         test_loss_ep, test_acc_ep = test_loop(test_generator, model, loss_fn)
 
         loss_avg = sum(losses_ep) / len(losses_ep)
+        acc_avg = sum(accuracies_ep) / len(accuracies_ep)
 
-        losses += losses_ep
-        accuracies += accuracies_ep
-        losses_avg += [loss_avg] * len(losses_ep)
+        # losses += losses_ep
+        # accuracies += accuracies_ep
+        # losses_avg += [loss_avg] * len(losses_ep)
         t_losses += [test_loss_ep] * len(losses_ep)
         t_accuracies += [test_acc_ep] * len(accuracies_ep)
 
-        plot_and_save([(losses, "Train Loss"), (losses_avg, "Train Avg Loss"),
-                      (t_losses, "Test Loss")], f"{PLOT_FOLDER}/loss_{fn}.png")
-        plot_and_save([(accuracies, "Train Accuracy"), (t_accuracies,
-                      "Test Accuracy")], f"{PLOT_FOLDER}/accuracies_{fn}.png")
+        wandb.log({"train_loss": loss_avg, "train_acc": acc_avg, "test_loss": test_loss_ep, "test_acc":test_acc_ep})
+
+        # plot_and_save([(losses, "Train Loss"), (losses_avg, "Train Avg Loss"),
+        #               (t_losses, "Test Loss")], f"{PLOT_FOLDER}/loss_{fn}.png")
+        # plot_and_save([(accuracies, "Train Accuracy"), (t_accuracies,
+        #               "Test Accuracy")], f"{PLOT_FOLDER}/accuracies_{fn}.png")
 
     return min(t_losses), max(t_accuracies)
 
@@ -153,11 +165,11 @@ def main():
     test_set = GameDataset(VAL_DATA_PATH, DEVICE, prefetch=True)
 
     config_space = {
-        'n_sizes': [256, 512],
+        'n_sizes': [512],
         'num_layers': [8],
         'learning_rates': [0.001],
-        'epochs': [100],
-        'batch_sizes': [1024, 512, 256]
+        'epochs': [95],
+        'batch_sizes': [1024]
     }
 
     combinations = itertools.product(*config_space.values())
@@ -173,6 +185,11 @@ def main():
             'batch_size': batch_size
         }
         print(f"Running Config: {config}")
+        run = wandb.init(
+            # Set the project where this run will be logged
+            project="go_train_new",
+            config=config
+        )
         min_t_loss, max_t_acc = train(training_set, test_set, **config)
         duration = time.time() - start
         print(
