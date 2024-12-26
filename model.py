@@ -3,7 +3,7 @@ from torch import nn
 
 
 class NeuralNetwork(nn.Module):
-    def __init__(self, board_size, n_size, num_layers=1):
+    def __init__(self, board_size, n_size, num_layers=1, drop_out=0.2):
         super().__init__()
         self.flatten = nn.Flatten()
 
@@ -17,7 +17,7 @@ class NeuralNetwork(nn.Module):
         self.res_layers = nn.ModuleList()
         for _ in range(num_layers):
             self.res_layers.append(
-                ResidualBlock(n_size)
+                ResidualBlock(n_size, drop_out)
             )
 
         # Output layer

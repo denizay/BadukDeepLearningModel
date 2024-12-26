@@ -7,6 +7,7 @@ import wandb
 from matplotlib import pyplot as plt
 from dataset import GameDataset
 from model import NeuralNetwork
+from torch.optim.lr_scheduler import StepLR
 
 
 BOARD_SIZE = 9
@@ -108,7 +109,8 @@ def train(
         num_layer,
         learning_rate,
         epoch,
-        batch_size):
+        batch_size,
+        drop_out):
     training_generator = torch.utils.data.DataLoader(
         train_set, batch_size=batch_size, shuffle=True)
     test_generator = torch.utils.data.DataLoader(
@@ -117,7 +119,7 @@ def train(
     print(board_size)
     print(n_size)
     print(num_layer)
-    model = NeuralNetwork(board_size, n_size, num_layer).to(DEVICE)
+    model = NeuralNetwork(board_size, n_size, num_layer, drop_out).to(DEVICE)
     start = time.time()
     model = torch.compile(model)
     stop = time.time()
@@ -127,11 +129,13 @@ def train(
         model.parameters(),
         lr=learning_rate,
         fused=True)
+    scheduler = StepLR(optimizer, step_size=20, gamma=0.5)
 
     losses, losses_avg, accuracies, t_losses, t_accuracies = [], [], [], [], []
     fn = f"{n_size}ns_{num_layer}ls_{learning_rate}lr_{epoch}ep_{batch_size}bs"
 
     for t in range(epoch):
+
         logger.info(f"Epoch {t+1}\n-------------------------------")
         torch.save(model.state_dict(), f'{CHECKPOINT_FOLDER}/mw_{fn}.pth')
 
@@ -149,6 +153,7 @@ def train(
         t_accuracies += [test_acc_ep] * len(accuracies_ep)
 
         wandb.log({"train_loss": loss_avg, "train_acc": acc_avg, "test_loss": test_loss_ep, "test_acc":test_acc_ep})
+        scheduler.step()
 
         # plot_and_save([(losses, "Train Loss"), (losses_avg, "Train Avg Loss"),
         #               (t_losses, "Test Loss")], f"{PLOT_FOLDER}/loss_{fn}.png")
@@ -165,16 +170,17 @@ def main():
     test_set = GameDataset(VAL_DATA_PATH, DEVICE, prefetch=True)
 
     config_space = {
-        'n_sizes': [512],
-        'num_layers': [8],
+        'n_sizes': [512, 1024, 2048],
+        'num_layers': [8, 16],
         'learning_rates': [0.001],
-        'epochs': [95],
-        'batch_sizes': [1024]
+        'epochs': [100],
+        'batch_sizes': [2048],
+        'drop_out': [0.2, 0.4]
     }
 
     combinations = itertools.product(*config_space.values())
 
-    for n_size, num_layer, learning_rate, epoch, batch_size in combinations:
+    for n_size, num_layer, learning_rate, epoch, batch_size, drop_out in combinations:
         start = time.time()
         config = {
             'board_size': BOARD_SIZE,
@@ -182,7 +188,8 @@ def main():
             'num_layer': num_layer,
             'learning_rate': learning_rate,
             'epoch': epoch,
-            'batch_size': batch_size
+            'batch_size': batch_size,
+            "drop_out" : drop_out
         }
         print(f"Running Config: {config}")
         run = wandb.init(
