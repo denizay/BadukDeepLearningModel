@@ -3,21 +3,21 @@ from torch import nn
 
 
 class NeuralNetwork(nn.Module):
-    def __init__(self, board_size, n_size, num_layers=1, drop_out=0.2):
+    def __init__(self, board_size, n_size, num_layers=1, drop_out=0.2, activation=nn.ReLU):
         super().__init__()
         self.flatten = nn.Flatten()
 
         # Initial layer
         self.input_layer = nn.Sequential(
             nn.Linear(board_size * board_size + 1, n_size),
-            nn.ReLU()
+            activation()
         )
 
         # Middle layers with residual connections
         self.res_layers = nn.ModuleList()
         for _ in range(num_layers):
             self.res_layers.append(
-                ResidualBlock(n_size, drop_out)
+                ResidualBlock(n_size, drop_out, activation)
             )
 
         # Output layer
@@ -40,20 +40,20 @@ class NeuralNetwork(nn.Module):
         return self.output_layer(x)
 
 class ResidualBlock(nn.Module):
-    def __init__(self, n_size, dropout_rate=0.2):
+    def __init__(self, n_size, dropout_rate=0.2, activation=nn.ReLU):
         super().__init__()
         self.block = nn.Sequential(
             nn.Linear(n_size, n_size),
-            nn.ReLU(),
+            activation(),
             nn.Dropout(dropout_rate),
             nn.Linear(n_size, n_size),
             nn.Dropout(dropout_rate)
         )
-        self.relu = nn.ReLU()
+        self.activation = activation()
 
     def forward(self, x):
         identity = x
         out = self.block(x)
         out += identity  # Skip connection
-        out = self.relu(out)
+        out = self.activation(out)
         return out

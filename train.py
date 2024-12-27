@@ -16,9 +16,9 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available(
 LOG_FILE_PATH = 'logs/logs_hps.log'
 PLOT_FOLDER = 'plots'
 CHECKPOINT_FOLDER = 'checkpoints'
-# TRAIN_DATA_PATH = "../train_data_big.pt"
-TRAIN_DATA_PATH =  "../validation_data_big.pt"
-VAL_DATA_PATH =  "../validation_data_big.pt"
+TRAIN_DATA_PATH = "train_data_big.pt"
+# TRAIN_DATA_PATH =  "validation_data_big.pt"
+VAL_DATA_PATH =  "validation_data_big.pt"
 
 wandb.login()
 torch.set_float32_matmul_precision("high")
@@ -43,9 +43,10 @@ def train_loop(dataloader, model, loss_fn, optimizer):
     losses, accuracies = [], []
 
     for batch, (X, y, nm_color) in enumerate(dataloader):
-        pred = model(X, nm_color)
-        y = torch.reshape(y, (-1, 81))
-        loss = loss_fn(pred, y)
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            pred = model(X, nm_color)
+            y = torch.reshape(y, (-1, 81))
+            loss = loss_fn(pred, y)
 
         loss.backward()
         optimizer.step()
@@ -110,7 +111,8 @@ def train(
         learning_rate,
         epoch,
         batch_size,
-        drop_out):
+        drop_out,
+        activation):
     training_generator = torch.utils.data.DataLoader(
         train_set, batch_size=batch_size, shuffle=True)
     test_generator = torch.utils.data.DataLoader(
@@ -119,7 +121,7 @@ def train(
     print(board_size)
     print(n_size)
     print(num_layer)
-    model = NeuralNetwork(board_size, n_size, num_layer, drop_out).to(DEVICE)
+    model = NeuralNetwork(board_size, n_size, num_layer, drop_out, activation).to(DEVICE)
     start = time.time()
     model = torch.compile(model)
     stop = time.time()
@@ -129,18 +131,24 @@ def train(
         model.parameters(),
         lr=learning_rate,
         fused=True)
-    scheduler = StepLR(optimizer, step_size=20, gamma=0.5)
+    scheduler = StepLR(optimizer, step_size=40, gamma=0.5)
 
     losses, losses_avg, accuracies, t_losses, t_accuracies = [], [], [], [], []
     fn = f"{n_size}ns_{num_layer}ls_{learning_rate}lr_{epoch}ep_{batch_size}bs"
+
+    ep_times = []
 
     for t in range(epoch):
 
         logger.info(f"Epoch {t+1}\n-------------------------------")
         torch.save(model.state_dict(), f'{CHECKPOINT_FOLDER}/mw_{fn}.pth')
 
+        start = time.time()
         losses_ep, accuracies_ep = train_loop(
             training_generator, model, loss_fn, optimizer)
+        stop = time.time()
+        ep_times.append(stop-start)
+        # print(f"{ep_times=}")
         test_loss_ep, test_acc_ep = test_loop(test_generator, model, loss_fn)
 
         loss_avg = sum(losses_ep) / len(losses_ep)
@@ -152,7 +160,10 @@ def train(
         t_losses += [test_loss_ep] * len(losses_ep)
         t_accuracies += [test_acc_ep] * len(accuracies_ep)
 
-        wandb.log({"train_loss": loss_avg, "train_acc": acc_avg, "test_loss": test_loss_ep, "test_acc":test_acc_ep})
+        current_lr = optimizer.param_groups[0]['lr']
+
+
+        wandb.log({"train_loss": loss_avg, "train_acc": acc_avg, "test_loss": test_loss_ep, "test_acc":test_acc_ep,"epoch_time":stop-start, "learning_rate":current_lr})
         scheduler.step()
 
         # plot_and_save([(losses, "Train Loss"), (losses_avg, "Train Avg Loss"),
@@ -170,17 +181,18 @@ def main():
     test_set = GameDataset(VAL_DATA_PATH, DEVICE, prefetch=True)
 
     config_space = {
-        'n_sizes': [512, 1024, 2048],
-        'num_layers': [8, 16],
+        'n_sizes': [512,1024,2048],
+        'num_layers': [8,16],
         'learning_rates': [0.001],
-        'epochs': [100],
-        'batch_sizes': [2048],
-        'drop_out': [0.2, 0.4]
+        'epochs': [240],
+        'batch_sizes': [4096, 2048, 1024],
+        'drop_out': [0.2, 0.4],
+        'activations': [nn.ReLU, nn.GELU, nn.SELU, nn.LeakyReLU]
     }
 
     combinations = itertools.product(*config_space.values())
 
-    for n_size, num_layer, learning_rate, epoch, batch_size, drop_out in combinations:
+    for n_size, num_layer, learning_rate, epoch, batch_size, drop_out, activation in combinations:
         start = time.time()
         config = {
             'board_size': BOARD_SIZE,
@@ -189,12 +201,13 @@ def main():
             'learning_rate': learning_rate,
             'epoch': epoch,
             'batch_size': batch_size,
-            "drop_out" : drop_out
+            'drop_out' : drop_out,
+            'activation': activation
         }
         print(f"Running Config: {config}")
         run = wandb.init(
             # Set the project where this run will be logged
-            project="go_train_new",
+            project="go_train_timing",
             config=config
         )
         min_t_loss, max_t_acc = train(training_set, test_set, **config)
