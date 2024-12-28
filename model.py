@@ -3,50 +3,64 @@ from torch import nn
 
 
 class NeuralNetwork(nn.Module):
-    def __init__(self, board_size, n_size, num_layers=1, drop_out=0.2, activation=nn.ReLU):
+    def __init__(self, board_size, n_filters, num_layers=1, drop_out=0.2, activation=nn.ReLU):
         super().__init__()
-        self.flatten = nn.Flatten()
+        self.board_size = board_size
+        self.activation = activation
 
-        # Initial layer
+        # Initial convolutional layer
         self.input_layer = nn.Sequential(
-            nn.Linear(board_size * board_size + 1, n_size),
-            activation()
+            nn.Conv2d(2, n_filters, kernel_size=3, padding=1),  # 2 input channels: board state + nm_color
+            activation(),
+            nn.Dropout(drop_out)
         )
 
-        # Middle layers with residual connections
+        # Residual convolutional layers
         self.res_layers = nn.ModuleList()
         for _ in range(num_layers):
             self.res_layers.append(
-                ResidualBlock(n_size, drop_out, activation)
+                ResidualConvBlock(n_filters, drop_out, activation)
             )
 
         # Output layer
-        self.output_layer = nn.Linear(n_size, board_size * board_size)
+        self.output_layer = nn.Sequential(
+            nn.Conv2d(n_filters, 1, kernel_size=1),  # Single output channel
+            nn.Flatten(),
+            nn.Linear(board_size * board_size, board_size * board_size)  # Output logits for each board position
+        )
 
     def forward(self, x, nm_color):
-        x = x.float()
-        x = self.flatten(x)
-        nm_color = nm_color.reshape(-1, 1).float()
-        x = torch.cat((x, nm_color), dim=1)
+        """
+        Args:
+            x: Tensor of shape (batch_size, board_size, board_size)
+            nm_color: Tensor of shape (batch_size, 1), indicating the player's color
+        """
+        batch_size = x.shape[0]
 
-        # Initial transformation
+        # Add an additional channel for `nm_color`
+        nm_color_channel = nm_color.view(batch_size, 1, 1, 1).expand(-1, 1, self.board_size, self.board_size)
+        x = torch.cat((x.unsqueeze(1), nm_color_channel), dim=1)  # Shape: (batch_size, 2, board_size, board_size)
+
+        # Apply initial transformation
         x = self.input_layer(x)
 
-        # Residual blocks
+        # Apply residual blocks
         for res_layer in self.res_layers:
             x = res_layer(x)
 
-        # Final output
-        return self.output_layer(x)
+        # Compute output
+        x = self.output_layer(x)
+        return x
 
-class ResidualBlock(nn.Module):
-    def __init__(self, n_size, dropout_rate=0.2, activation=nn.ReLU):
+
+class ResidualConvBlock(nn.Module):
+    def __init__(self, n_filters, dropout_rate=0.2, activation=nn.ReLU):
         super().__init__()
         self.block = nn.Sequential(
-            nn.Linear(n_size, n_size),
+            nn.Conv2d(n_filters, n_filters, kernel_size=3, padding=1),
             activation(),
             nn.Dropout(dropout_rate),
-            nn.Linear(n_size, n_size),
+            nn.Conv2d(n_filters, n_filters, kernel_size=3, padding=1),
             nn.Dropout(dropout_rate)
         )
         self.activation = activation()

@@ -122,16 +122,16 @@ def train(
     print(n_size)
     print(num_layer)
     model = NeuralNetwork(board_size, n_size, num_layer, drop_out, activation).to(DEVICE)
-    start = time.time()
-    model = torch.compile(model)
-    stop = time.time()
-    print(f"copmile took {stop-start}")
+    # start = time.time()
+    # model = torch.compile(model)
+    # stop = time.time()
+    # print(f"copmile took {stop-start}")
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=learning_rate,
         fused=True)
-    scheduler = StepLR(optimizer, step_size=40, gamma=0.5)
+    scheduler = StepLR(optimizer, step_size=30, gamma=0.5)
 
     losses, losses_avg, accuracies, t_losses, t_accuracies = [], [], [], [], []
     fn = f"{n_size}ns_{num_layer}ls_{learning_rate}lr_{epoch}ep_{batch_size}bs"
@@ -181,13 +181,13 @@ def main():
     test_set = GameDataset(VAL_DATA_PATH, DEVICE, prefetch=True)
 
     config_space = {
-        'n_sizes': [512,1024,2048],
-        'num_layers': [8,16],
+        'n_sizes': [128],
+        'num_layers': [4],
         'learning_rates': [0.001],
-        'epochs': [240],
-        'batch_sizes': [4096, 2048, 1024],
-        'drop_out': [0.2, 0.4],
-        'activations': [nn.ReLU, nn.GELU, nn.SELU, nn.LeakyReLU]
+        'epochs': [400],
+        'batch_sizes': [4096],
+        'drop_out': [0.4],
+        'activations': [nn.LeakyReLU]
     }
 
     combinations = itertools.product(*config_space.values())
@@ -211,6 +211,7 @@ def main():
             config=config
         )
         min_t_loss, max_t_acc = train(training_set, test_set, **config)
+        wandb.finish()
         duration = time.time() - start
         print(
             f"Minimum test loss: {min_t_loss}, maximum test accuracy: {max_t_acc}")
