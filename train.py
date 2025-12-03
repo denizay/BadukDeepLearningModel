@@ -1,29 +1,41 @@
-import time
-import logging
 import itertools
+import json
+import logging
+import os
+import time
+from datetime import datetime
+
 import torch
-from torch import nn
 from matplotlib import pyplot as plt
+from torch import nn
+from tqdm import tqdm
+
 from dataset import GameDataset
 from model import NeuralNetwork
 
-
 BOARD_SIZE = 9
-DEVICE = torch.device("cuda" if torch.cuda.is_available(
-) else "mps" if torch.backends.mps.is_available() else "cpu")
-LOG_FILE_PATH = 'logs/logs_hps.log'
-PLOT_FOLDER = 'plots'
-CHECKPOINT_FOLDER = 'checkpoints'
-#TRAIN_DATA_PATH = "data_pt/train_data_big.pt"
-TRAIN_DATA_PATH =  "data_pt/validation_data_big.pt"
-VAL_DATA_PATH = "data_pt/validation_data_big.pt"
-
+DEVICE = torch.device(
+    "cuda"
+    if torch.cuda.is_available()
+    else "mps" if torch.backends.mps.is_available() else "cpu"
+)
+LOG_FOLDER = "logs"
+PLOT_FOLDER = "plots"
+CHECKPOINT_FOLDER = "checkpoints"
+CONFIG_FOLDER = "configs"
+TRAIN_DATA_PATH = "data/train_data_big.pkl"
+VAL_DATA_PATH = "data/validation_data_big.pkl"
 
 
 def setup_logger(log_file_path):
-    logger = logging.getLogger()
+    os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
+
+    logger = logging.getLogger(log_file_path)
     logger.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s')
+    if logger.hasHandlers():
+        logger.handlers.clear()
+
+    formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
     file_handler = logging.FileHandler(log_file_path)
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(formatter)
@@ -31,10 +43,14 @@ def setup_logger(log_file_path):
     return logger
 
 
-logger = setup_logger(LOG_FILE_PATH)
+def save_config(config, run_name):
+    os.makedirs(CONFIG_FOLDER, exist_ok=True)
+    config_path = os.path.join(CONFIG_FOLDER, f"{run_name}.json")
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=4)
 
 
-def train_loop(dataloader, model, loss_fn, optimizer):
+def train_loop(dataloader, model, loss_fn, optimizer, logger):
     model.train()
     size = len(dataloader.dataset)
     losses, accuracies = [], []
@@ -66,7 +82,7 @@ def train_loop(dataloader, model, loss_fn, optimizer):
     return losses, accuracies
 
 
-def test_loop(dataloader, model, loss_fn):
+def test_loop(dataloader, model, loss_fn, logger):
     model.eval()
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -77,18 +93,19 @@ def test_loop(dataloader, model, loss_fn):
             pred = model(X, nm_color)
             y = torch.reshape(y, (-1, 81))
             test_loss += loss_fn(pred, y).item()
-            correct += (pred.argmax(1) == y.argmax(1)
-                        ).type(torch.float).sum().item()
+            correct += (pred.argmax(1) == y.argmax(1)).type(torch.float).sum().item()
 
     test_loss /= num_batches
     accuracy = 100 * correct / size
 
     logger.info(
-        f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")
+        f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n"
+    )
     return test_loss, accuracy
 
 
-def plot_and_save(logs, file_name):  # claude onerisini dene
+def plot_and_save(logs, file_name):
+    os.makedirs(os.path.dirname(file_name), exist_ok=True)
     fig = plt.figure()
     for log_vals, label in logs:
         plt.plot(log_vals, label=label)
@@ -99,36 +116,64 @@ def plot_and_save(logs, file_name):  # claude onerisini dene
 
 
 def train(
-        train_set,
-        test_set,
-        board_size,
-        n_size,
-        num_layer,
-        learning_rate,
-        epoch,
-        batch_size):
+    train_set,
+    test_set,
+    board_size,
+    n_size,
+    num_layer,
+    learning_rate,
+    epoch,
+    batch_size,
+    run_name,
+):
+
+    # Setup run-specific paths
+    run_log_path = os.path.join(LOG_FOLDER, f"{run_name}.log")
+    run_plot_folder = os.path.join(PLOT_FOLDER, run_name)
+    run_checkpoint_folder = os.path.join(CHECKPOINT_FOLDER, run_name)
+
+    os.makedirs(run_plot_folder, exist_ok=True)
+    os.makedirs(run_checkpoint_folder, exist_ok=True)
+
+    logger = setup_logger(run_log_path)
+
     training_generator = torch.utils.data.DataLoader(
-        train_set, batch_size=batch_size, shuffle=True)
+        train_set, batch_size=batch_size, shuffle=True
+    )
     test_generator = torch.utils.data.DataLoader(
-        test_set, batch_size=batch_size, shuffle=True)
+        test_set, batch_size=batch_size, shuffle=True
+    )
 
     model = NeuralNetwork(board_size, n_size, num_layer).to(DEVICE)
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(
-        model.parameters(),
-        lr=learning_rate,
-        weight_decay=1e-4)
+        model.parameters(), lr=learning_rate, weight_decay=1e-4
+    )
 
     losses, losses_avg, accuracies, t_losses, t_accuracies = [], [], [], [], []
-    fn = f"{n_size}ns_{num_layer}ls_{learning_rate}lr_{epoch}ep_{batch_size}bs"
 
-    for t in range(epoch):
+    # Save initial config
+    config = {
+        "board_size": board_size,
+        "n_size": n_size,
+        "num_layer": num_layer,
+        "learning_rate": learning_rate,
+        "epoch": epoch,
+        "batch_size": batch_size,
+    }
+    save_config(config, run_name)
+
+    for t in tqdm(range(epoch)):
         logger.info(f"Epoch {t+1}\n-------------------------------")
-        torch.save(model.state_dict(), f'{CHECKPOINT_FOLDER}/mw_{fn}.pth')
+
+        # Save checkpoint
+        checkpoint_path = os.path.join(run_checkpoint_folder, f"epoch_{t+1}.pth")
+        torch.save(model.state_dict(), checkpoint_path)
 
         losses_ep, accuracies_ep = train_loop(
-            training_generator, model, loss_fn, optimizer)
-        test_loss_ep, test_acc_ep = test_loop(test_generator, model, loss_fn)
+            training_generator, model, loss_fn, optimizer, logger
+        )
+        test_loss_ep, test_acc_ep = test_loop(test_generator, model, loss_fn, logger)
 
         loss_avg = sum(losses_ep) / len(losses_ep)
 
@@ -138,10 +183,18 @@ def train(
         t_losses += [test_loss_ep] * len(losses_ep)
         t_accuracies += [test_acc_ep] * len(accuracies_ep)
 
-        plot_and_save([(losses, "Train Loss"), (losses_avg, "Train Avg Loss"),
-                      (t_losses, "Test Loss")], f"{PLOT_FOLDER}/loss_{fn}.png")
-        plot_and_save([(accuracies, "Train Accuracy"), (t_accuracies,
-                      "Test Accuracy")], f"{PLOT_FOLDER}/accuracies_{fn}.png")
+        plot_and_save(
+            [
+                (losses, "Train Loss"),
+                (losses_avg, "Train Avg Loss"),
+                (t_losses, "Test Loss"),
+            ],
+            os.path.join(run_plot_folder, "loss.png"),
+        )
+        plot_and_save(
+            [(accuracies, "Train Accuracy"), (t_accuracies, "Test Accuracy")],
+            os.path.join(run_plot_folder, "accuracies.png"),
+        )
 
     return min(t_losses), max(t_accuracies)
 
@@ -153,30 +206,34 @@ def main():
     test_set = GameDataset(VAL_DATA_PATH, DEVICE, prefetch=True)
 
     config_space = {
-        'n_sizes': [256, 512],
-        'num_layers': [8],
-        'learning_rates': [0.001],
-        'epochs': [100],
-        'batch_sizes': [1024, 512, 256]
+        "n_sizes": [256, 512],
+        "num_layers": [8],
+        "learning_rates": [0.001],
+        "epochs": [100],
+        "batch_sizes": [1024, 512, 256],
     }
 
     combinations = itertools.product(*config_space.values())
 
     for n_size, num_layer, learning_rate, epoch, batch_size in combinations:
+        run_name = datetime.now().strftime("%Y%m%d_%H%M%S")
+
         start = time.time()
         config = {
-            'board_size': BOARD_SIZE,
-            'n_size': n_size,
-            'num_layer': num_layer,
-            'learning_rate': learning_rate,
-            'epoch': epoch,
-            'batch_size': batch_size
+            "board_size": BOARD_SIZE,
+            "n_size": n_size,
+            "num_layer": num_layer,
+            "learning_rate": learning_rate,
+            "epoch": epoch,
+            "batch_size": batch_size,
+            "run_name": run_name,
         }
         print(f"Running Config: {config}")
+
         min_t_loss, max_t_acc = train(training_set, test_set, **config)
+
         duration = time.time() - start
-        print(
-            f"Minimum test loss: {min_t_loss}, maximum test accuracy: {max_t_acc}")
+        print(f"Minimum test loss: {min_t_loss}, maximum test accuracy: {max_t_acc}")
         print(f"Ran in {duration} seconds")
         print()
 
