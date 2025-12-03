@@ -82,26 +82,26 @@ def train_loop(dataloader, model, loss_fn, optimizer, logger):
     return losses, accuracies
 
 
-def test_loop(dataloader, model, loss_fn, logger):
+def validation_loop(dataloader, model, loss_fn, logger):
     model.eval()
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
-    test_loss, correct = 0, 0
+    val_loss, correct = 0, 0
 
     with torch.no_grad():
         for X, y, nm_color in dataloader:
             pred = model(X, nm_color)
             y = torch.reshape(y, (-1, 81))
-            test_loss += loss_fn(pred, y).item()
+            val_loss += loss_fn(pred, y).item()
             correct += (pred.argmax(1) == y.argmax(1)).type(torch.float).sum().item()
 
-    test_loss /= num_batches
+    val_loss /= num_batches
     accuracy = 100 * correct / size
 
     logger.info(
-        f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n"
+        f"Validation Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {val_loss:>8f} \n"
     )
-    return test_loss, accuracy
+    return val_loss, accuracy
 
 
 def plot_and_save(logs, file_name):
@@ -117,7 +117,7 @@ def plot_and_save(logs, file_name):
 
 def train(
     train_set,
-    test_set,
+    val_set,
     board_size,
     n_size,
     num_layer,
@@ -140,8 +140,8 @@ def train(
     training_generator = torch.utils.data.DataLoader(
         train_set, batch_size=batch_size, shuffle=True
     )
-    test_generator = torch.utils.data.DataLoader(
-        test_set, batch_size=batch_size, shuffle=True
+    val_generator = torch.utils.data.DataLoader(
+        val_set, batch_size=batch_size, shuffle=True
     )
 
     model = NeuralNetwork(board_size, n_size, num_layer).to(DEVICE)
@@ -150,7 +150,7 @@ def train(
         model.parameters(), lr=learning_rate, weight_decay=1e-4
     )
 
-    losses, losses_avg, accuracies, t_losses, t_accuracies = [], [], [], [], []
+    losses, losses_avg, accuracies, val_losses, val_accuracies = [], [], [], [], []
 
     # Save initial config
     config = {
@@ -173,37 +173,37 @@ def train(
         losses_ep, accuracies_ep = train_loop(
             training_generator, model, loss_fn, optimizer, logger
         )
-        test_loss_ep, test_acc_ep = test_loop(test_generator, model, loss_fn, logger)
+        val_loss_ep, val_acc_ep = validation_loop(val_generator, model, loss_fn, logger)
 
         loss_avg = sum(losses_ep) / len(losses_ep)
 
         losses += losses_ep
         accuracies += accuracies_ep
         losses_avg += [loss_avg] * len(losses_ep)
-        t_losses += [test_loss_ep] * len(losses_ep)
-        t_accuracies += [test_acc_ep] * len(accuracies_ep)
+        val_losses += [val_loss_ep] * len(losses_ep)
+        val_accuracies += [val_acc_ep] * len(accuracies_ep)
 
         plot_and_save(
             [
                 (losses, "Train Loss"),
                 (losses_avg, "Train Avg Loss"),
-                (t_losses, "Test Loss"),
+                (val_losses, "Validation Loss"),
             ],
             os.path.join(run_plot_folder, "loss.png"),
         )
         plot_and_save(
-            [(accuracies, "Train Accuracy"), (t_accuracies, "Test Accuracy")],
+            [(accuracies, "Train Accuracy"), (val_accuracies, "Validation Accuracy")],
             os.path.join(run_plot_folder, "accuracies.png"),
         )
 
-    return min(t_losses), max(t_accuracies)
+    return min(val_losses), max(val_accuracies)
 
 
 def main():
     print(f"Using device {DEVICE}")
 
     training_set = GameDataset(TRAIN_DATA_PATH, DEVICE, prefetch=True)
-    test_set = GameDataset(VAL_DATA_PATH, DEVICE, prefetch=True)
+    val_set = GameDataset(VAL_DATA_PATH, DEVICE, prefetch=True)
 
     config_space = {
         "n_sizes": [256, 512],
@@ -230,10 +230,12 @@ def main():
         }
         print(f"Running Config: {config}")
 
-        min_t_loss, max_t_acc = train(training_set, test_set, **config)
+        min_val_loss, max_val_acc = train(training_set, val_set, **config)
 
         duration = time.time() - start
-        print(f"Minimum test loss: {min_t_loss}, maximum test accuracy: {max_t_acc}")
+        print(
+            f"Minimum validation loss: {min_val_loss}, maximum validation accuracy: {max_val_acc}"
+        )
         print(f"Ran in {duration} seconds")
         print()
 
