@@ -6,10 +6,9 @@ import time
 from datetime import datetime
 
 import wandb
-
 import torch
-from matplotlib import pyplot as plt
 from torch import nn
+from matplotlib import pyplot as plt
 from tqdm import tqdm
 
 from dataset import GameDataset
@@ -139,6 +138,7 @@ def train(
     learning_rate,
     epoch,
     batch_size,
+    dropout,
     run_name,
 ):
 
@@ -159,7 +159,7 @@ def train(
         val_set, batch_size=batch_size, shuffle=True
     )
 
-    model = NeuralNetwork(board_size, n_size, num_layer).to(DEVICE)
+    model = NeuralNetwork(board_size, n_size, num_layer, dropout).to(DEVICE)
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(
         model.parameters(), lr=learning_rate, weight_decay=1e-4
@@ -175,6 +175,7 @@ def train(
         "learning_rate": learning_rate,
         "epoch": epoch,
         "batch_size": batch_size,
+        "dropout": dropout,
     }
     save_config(config, run_name)
 
@@ -234,11 +235,12 @@ def main():
         "learning_rates": [0.001],
         "epochs": [100],
         "batch_sizes": [1024, 512, 256],
+        "dropouts": [0.0, 0.1, 0.3],
     }
 
     combinations = itertools.product(*config_space.values())
 
-    for n_size, num_layer, learning_rate, epoch, batch_size in combinations:
+    for n_size, num_layer, learning_rate, epoch, batch_size, dropout in combinations:
         run_name = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         start = time.time()
@@ -248,7 +250,9 @@ def main():
             "num_layer": num_layer,
             "learning_rate": learning_rate,
             "epoch": epoch,
+            "epoch": epoch,
             "batch_size": batch_size,
+            "dropout": dropout,
             "run_name": run_name,
         }
         print(f"Running Config: {config}")

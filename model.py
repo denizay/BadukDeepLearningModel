@@ -3,17 +3,21 @@ from torch import nn
 
 
 class NeuralNetwork(nn.Module):
-    def __init__(self, board_size, n_size, num_layers=1):
+    def __init__(self, board_size, n_size, num_layers=1, dropout=0.0):
         super().__init__()
         self.flatten = nn.Flatten()
 
         layers = []
         layers.append(nn.Linear(board_size * board_size + 1, n_size))
         layers.append(nn.ReLU())
+        if dropout > 0:
+            layers.append(nn.Dropout(dropout))
 
         for _ in range(num_layers):
             layers.append(nn.Linear(n_size, n_size))
             layers.append(nn.ReLU())
+            if dropout > 0:
+                layers.append(nn.Dropout(dropout))
 
         layers.append(nn.Linear(n_size, board_size * board_size))
 
