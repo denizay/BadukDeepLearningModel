@@ -5,6 +5,8 @@ import os
 import time
 from datetime import datetime
 
+import wandb
+
 import torch
 from matplotlib import pyplot as plt
 from torch import nn
@@ -50,7 +52,7 @@ def save_config(config, run_name):
         json.dump(config, f, indent=4)
 
 
-def train_loop(dataloader, model, loss_fn, optimizer, logger):
+def train_loop(dataloader, model, loss_fn, optimizer, logger, epoch):
     model.train()
     size = len(dataloader.dataset)
     losses, accuracies = [], []
@@ -78,11 +80,19 @@ def train_loop(dataloader, model, loss_fn, optimizer, logger):
             logger.info(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
             logger.info(f"Accuracy: {100*correct/batch_size}")
             logger.info(f"max pred: {torch.max(pred[0])}")
+            
+            wandb.log({
+                "train_loss": loss.item(),
+                "train_accuracy": accuracy,
+                "epoch": epoch,
+                "batch": batch,
+                "step": (epoch - 1) * len(dataloader) + batch
+            })
 
     return losses, accuracies
 
 
-def validation_loop(dataloader, model, loss_fn, logger):
+def validation_loop(dataloader, model, loss_fn, logger, epoch):
     model.eval()
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
@@ -101,6 +111,11 @@ def validation_loop(dataloader, model, loss_fn, logger):
     logger.info(
         f"Validation Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {val_loss:>8f} \n"
     )
+    wandb.log({
+        "val_loss": val_loss,
+        "val_accuracy": accuracy,
+        "epoch": epoch
+    })
     return val_loss, accuracy
 
 
@@ -163,6 +178,13 @@ def train(
     }
     save_config(config, run_name)
 
+    wandb.init(
+        project="BadukDeepLearning",
+        name=run_name,
+        config=config
+    )
+    wandb.watch(model, log="all")
+
     for t in tqdm(range(epoch)):
         logger.info(f"Epoch {t+1}\n-------------------------------")
 
@@ -171,9 +193,9 @@ def train(
         torch.save(model.state_dict(), checkpoint_path)
 
         losses_ep, accuracies_ep = train_loop(
-            training_generator, model, loss_fn, optimizer, logger
+            training_generator, model, loss_fn, optimizer, logger, t+1
         )
-        val_loss_ep, val_acc_ep = validation_loop(val_generator, model, loss_fn, logger)
+        val_loss_ep, val_acc_ep = validation_loop(val_generator, model, loss_fn, logger, t+1)
 
         loss_avg = sum(losses_ep) / len(losses_ep)
 
@@ -196,6 +218,7 @@ def train(
             os.path.join(run_plot_folder, "accuracies.png"),
         )
 
+    wandb.finish()
     return min(val_losses), max(val_accuracies)
 
 
