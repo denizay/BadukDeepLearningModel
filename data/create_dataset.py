@@ -3,11 +3,28 @@ from glob import glob
 from tqdm import tqdm
 import numpy as np
 import torch
-from sgfparser import sgf_to_matrix
+from sgfparser import get_all_moves
 
 
 SGF_FOLDER_PATH = "sgfs"
 BOARD_POS_COUNT = 16
+
+
+def apply_symmetry(board, label, k):
+    """
+    Apply one of 8 symmetries to the board and label.
+    k: 0-7
+    """
+    if k >= 4:
+        board = np.flip(board, axis=0)
+        label = np.flip(label, axis=0)
+        k -= 4
+    
+    if k > 0:
+        board = np.rot90(board, k=k)
+        label = np.rot90(label, k=k)
+        
+    return board.copy(), label.copy()
 
 
 def get_positions(sgf_paths):
@@ -17,17 +34,35 @@ def get_positions(sgf_paths):
         try:
             with open(sgf_path, 'r', encoding='utf-8') as f:
                 sgf_data = f.read()
-            for i in range(BOARD_POS_COUNT):
-                board_matrix, label_board, label_color = sgf_to_matrix(
-                    sgf_data)
-                board_matrix = np.rot90(board_matrix, k=i).copy()
-                label_board = np.rot90(label_board, k=i).copy()
+            
+            # Get all valid moves/states from the game
+            game_samples = get_all_moves(sgf_data)
+            
+            if not game_samples:
+                continue
+                
+            # Sample distinct moves
+            num_samples = len(game_samples)
+            if num_samples <= BOARD_POS_COUNT:
+                indices = np.arange(num_samples)
+            else:
+                indices = np.random.choice(num_samples, BOARD_POS_COUNT, replace=False)
+            
+            for i, idx in enumerate(indices):
+                board_matrix, label_board, label_color = game_samples[idx]
+                
+                # Apply symmetries sequentially
+                k = i % 8
+                board_matrix, label_board = apply_symmetry(board_matrix, label_board, k)
+                
                 data.append(
                     (torch.tensor(
                         board_matrix, dtype=torch.float), torch.tensor(
                         label_board, dtype=torch.float), torch.tensor(
                         label_color, dtype=torch.float)))
+                        
         except Exception as e:
+            print(f"Error processing {sgf_path}: {e}")
             fail_count += 1
     return data, fail_count
 

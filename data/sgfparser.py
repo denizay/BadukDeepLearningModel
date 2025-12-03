@@ -71,69 +71,87 @@ def remove_group(board, row, col):
         board[r, c] = 0
 
 
-def sgf_to_matrix(sgf_content):
+def get_all_moves(sgf_content):
+    """
+    Parse SGF content and return a list of (board, label_board, player_color)
+    for all valid moves in the game.
+    """
     # Parse SGF file to find board size and moves
     board_size = 9
     if 'SZ[' in sgf_content:
-        board_size_str = sgf_content.split('SZ[')[1].split(']')[0]
-        board_size = int(board_size_str)
+        try:
+            board_size_str = sgf_content.split('SZ[')[1].split(']')[0]
+            board_size = int(board_size_str)
+        except IndexError:
+            pass
 
-    # Initialize the board matrix (0 = empty, 1 = black, 2 = white)
+    # Initialize the board matrix (0 = empty, 1 = black, -1 = white)
     board = np.zeros((board_size, board_size), dtype=float)
 
     # Parse moves, assume format ;B[dd];W[pp]...
-    moves = sgf_content.split(';')[1:]  # Split at each move
+    # Split at each move
+    raw_moves = sgf_content.split(';')
+    
+    # Filter valid moves
+    moves = []
+    for move in raw_moves:
+        if move.startswith('B[') or move.startswith('W['):
+            moves.append(move)
 
-    moves = [move for move in moves if move.startswith(
-        'B[') or move.startswith('W[')]
+    game_samples = []
 
-    bpos_move = random.randint(0, len(moves) - 2)
+    # Iterate through moves to generate states
+    # We need at least one move to have a label
+    for i in range(len(moves) - 1):
+        current_move = moves[i]
+        next_move = moves[i+1]
 
-    label_move = moves[bpos_move + 1]
-    if label_move.startswith('B['):
-        label_color = BLACK
-    elif label_move.startswith('W['):
-        label_color = WHITE
-    else:
-        return None
-
-    label_board = np.zeros((board_size, board_size), dtype=int)
-    # print("label move:")
-    # print(label_move)
-
-    if len(label_move[2:4]) == 2 and not check_pass(label_move):
-        # print((label_move[2:4]))
-        # print(len(label_move[2:4]))
-        label_row, label_col = parse_position(label_move[2:4])
-        # label_board[label_row, label_col] = label_color
-        label_board[label_row, label_col] = 1
-
-    for move in moves[:bpos_move + 1]:
-        if move.startswith('B['):
+        # 1. Apply current_move to board
+        if current_move.startswith('B['):
             color = BLACK
-        elif move.startswith('W['):
+        elif current_move.startswith('W['):
             color = WHITE
         else:
             continue
 
-        pos = move[2:4]
-        # print(move)
+        pos = current_move[2:4]
         if len(pos) == 2:  # Valid position
             row, col = parse_position(pos)
             board[row, col] = color
-
-            # Check for captures around the placed stone
-            # opponent_color = 3 - color
-            opponent_color = - color
+            
+            # Handle captures
+            opponent_color = -color
             for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                 nr, nc = row + dr, col + dc
                 if 0 <= nr < board_size and 0 <= nc < board_size:
                     if board[nr, nc] == opponent_color:
                         if count_liberties(board, nr, nc) == 0:
                             remove_group(board, nr, nc)
-
-            # Check if the placed stone has no liberties (self-capture)
+            
+            # Self-capture check
             if count_liberties(board, row, col) == 0:
                 remove_group(board, row, col)
 
-    return board, label_board, label_color
+        # 2. Prepare label from next_move
+        if next_move.startswith('B['):
+            label_color = BLACK
+        elif next_move.startswith('W['):
+            label_color = WHITE
+        else:
+            continue # Skip if next move is invalid
+
+        # Skip passes for label generation if desired, or handle them.
+        # The original code skipped passes for labels: "not check_pass(label_move)"
+        if len(next_move[2:4]) == 2 and not check_pass(next_move):
+            label_row, label_col = parse_position(next_move[2:4])
+            
+            # Create label board (all zeros except target)
+            label_board = np.zeros((board_size, board_size), dtype=int)
+            label_board[label_row, label_col] = 1
+            
+            # Append copy of current board, label, and color
+            # Note: We append the board state AFTER the current move is played, 
+            # which is the state used to predict the NEXT move.
+            game_samples.append((board.copy(), label_board, label_color))
+
+    return game_samples
