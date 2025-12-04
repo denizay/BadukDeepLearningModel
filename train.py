@@ -8,6 +8,7 @@ from datetime import datetime
 import wandb
 import torch
 from torch import nn
+from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingWarmRestarts, OneCycleLR
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 
@@ -51,7 +52,7 @@ def save_config(config, run_name):
         json.dump(config, f, indent=4)
 
 
-def train_loop(dataloader, model, loss_fn, optimizer, logger, epoch):
+def train_loop(dataloader, model, loss_fn, optimizer, logger, epoch, scheduler=None):
     model.train()
     size = len(dataloader.dataset)
     losses, accuracies = [], []
@@ -64,6 +65,9 @@ def train_loop(dataloader, model, loss_fn, optimizer, logger, epoch):
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
+
+        if isinstance(scheduler, OneCycleLR):
+            scheduler.step()
 
         if batch % 1000 == 0:
             batch_size = len(X)
@@ -140,6 +144,8 @@ def train(
     batch_size,
     dropout,
     run_name,
+    weight_decay,
+    scheduler_type="ReduceLROnPlateau"
 ):
 
     # Setup run-specific paths
@@ -161,10 +167,38 @@ def train(
 
     model = NeuralNetwork(board_size, n_size, num_layer, dropout).to(DEVICE)
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(
-        model.parameters(), lr=learning_rate, weight_decay=1e-4
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=learning_rate, weight_decay=weight_decay
     )
-
+    
+    scheduler = None
+    if scheduler_type == "ReduceLROnPlateau":
+        scheduler = ReduceLROnPlateau(
+            optimizer, 
+            mode='min', 
+            factor=0.80
+            patience=10,
+            min_lr=1e-7
+        )
+    elif scheduler_type == "CosineAnnealingWarmRestarts":
+        scheduler = CosineAnnealingWarmRestarts(
+            optimizer, 
+            T_0=10,
+            T_mult=2,
+            eta_min=1e-6
+        )
+    elif scheduler_type == "OneCycleLR":
+        scheduler = OneCycleLR(
+            optimizer, 
+            max_lr=learning_rate * 10,
+            steps_per_epoch=len(training_generator), 
+            epochs=epoch,
+            pct_start=0.3,
+            anneal_strategy='cos',
+            div_factor=25.0,
+            final_div_factor=10000.0
+        )
+    
     losses, losses_avg, accuracies, val_losses, val_accuracies = [], [], [], [], []
 
     # Save initial config
@@ -176,6 +210,8 @@ def train(
         "epoch": epoch,
         "batch_size": batch_size,
         "dropout": dropout,
+        "scheduler_type": scheduler_type,
+        "weight_decay": weight_decay,
     }
     save_config(config, run_name)
 
@@ -191,12 +227,21 @@ def train(
 
         # Save checkpoint
         checkpoint_path = os.path.join(run_checkpoint_folder, f"epoch_{t+1}.pth")
-        torch.save(model.state_dict(), checkpoint_path)
+        if t % 20 == 0:
+            torch.save(model.state_dict(), checkpoint_path)
 
         losses_ep, accuracies_ep = train_loop(
-            training_generator, model, loss_fn, optimizer, logger, t+1
+            training_generator, model, loss_fn, optimizer, logger, t+1, scheduler
         )
         val_loss_ep, val_acc_ep = validation_loop(val_generator, model, loss_fn, logger, t+1)
+        
+        if scheduler_type == "ReduceLROnPlateau":
+            scheduler.step(val_loss_ep)
+        elif scheduler_type == "CosineAnnealingWarmRestarts":
+            scheduler.step()
+            
+        current_lr = optimizer.param_groups[0]['lr']
+        wandb.log({"learning_rate": current_lr, "epoch": t+1})
 
         loss_avg = sum(losses_ep) / len(losses_ep)
 
@@ -230,17 +275,19 @@ def main():
     val_set = GameDataset(VAL_DATA_PATH, DEVICE, prefetch=True)
 
     config_space = {
-        "n_sizes": [256, 512],
-        "num_layers": [8],
-        "learning_rates": [0.001],
-        "epochs": [100],
-        "batch_sizes": [1024, 512, 256],
-        "dropouts": [0.0, 0.1, 0.3],
+        "n_sizes": [2048, 4096],
+        "num_layers": [3],
+        "learning_rates": [0.01],
+        "epochs": [900],
+        "batch_sizes": [1024],
+        "dropouts": [0.1],
+        "weight_decays": [1e-1],
+        "scheduler_types": ["ReduceLROnPlateau"]
     }
 
     combinations = itertools.product(*config_space.values())
 
-    for n_size, num_layer, learning_rate, epoch, batch_size, dropout in combinations:
+    for n_size, num_layer, learning_rate, epoch, batch_size, dropout, weight_decay, scheduler_type in combinations:
         run_name = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         start = time.time()
@@ -250,9 +297,10 @@ def main():
             "num_layer": num_layer,
             "learning_rate": learning_rate,
             "epoch": epoch,
-            "epoch": epoch,
             "batch_size": batch_size,
             "dropout": dropout,
+            "scheduler_type": scheduler_type,
+            "weight_decay": weight_decay,
             "run_name": run_name,
         }
         print(f"Running Config: {config}")
