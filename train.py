@@ -109,7 +109,7 @@ def validation_loop(dataloader, model, loss_fn, logger, epoch):
     model.eval()
     size = len(dataloader.dataset)
     num_batches = len(dataloader)
-    val_loss, correct = 0, 0
+    val_loss, correct, correct_top3 = 0, 0, 0
 
     with torch.no_grad():
         for X, y, nm_color in dataloader:
