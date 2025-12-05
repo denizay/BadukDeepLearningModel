@@ -183,6 +183,7 @@ def train(
     )
 
     model = NeuralNetwork(board_size, n_size, num_layer, dropout).to(DEVICE)
+    model.compile()
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=learning_rate, weight_decay=weight_decay
@@ -237,7 +238,8 @@ def train(
         name=run_name,
         config=config
     )
-    wandb.watch(model, log="all")
+    # messes up compiling
+    # wandb.watch(model, log="all")
 
     for t in tqdm(range(epoch)):
         logger.info(f"Epoch {t+1}\n-------------------------------")
