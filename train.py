@@ -55,7 +55,7 @@ def save_config(config, run_name):
 def train_loop(dataloader, model, loss_fn, optimizer, logger, epoch, scheduler=None):
     model.train()
     size = len(dataloader.dataset)
-    losses, accuracies = [], []
+    losses, accuracies, accuracies_top3 = [], [], []
 
     for batch, (X, y, nm_color) in enumerate(dataloader):
         pred = model(X, nm_color)
@@ -77,22 +77,32 @@ def train_loop(dataloader, model, loss_fn, optimizer, logger, epoch, scheduler=N
             correct = (pred.argmax(1) == y.argmax(1)).sum().item()
             accuracy = 100 * correct / batch_size
 
+            # Top-3 Accuracy
+            _, top3_pred = pred.topk(3, 1, True, True)
+            correct_top3 = 0
+            target = y.argmax(1).view(-1, 1)
+            correct_top3 += top3_pred.eq(target).sum().item()
+            accuracy_top3 = 100 * correct_top3 / batch_size
+
             losses.append(loss.item())
             accuracies.append(accuracy)
+            accuracies_top3.append(accuracy_top3)
 
             logger.info(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
             logger.info(f"Accuracy: {100*correct/batch_size}")
+            logger.info(f"Top-3 Accuracy: {accuracy_top3}")
             logger.info(f"max pred: {torch.max(pred[0])}")
             
             wandb.log({
                 "train_loss": loss.item(),
                 "train_accuracy": accuracy,
+                "train_accuracy_top3": accuracy_top3,
                 "epoch": epoch,
                 "batch": batch,
                 "step": (epoch - 1) * len(dataloader) + batch
             })
 
-    return losses, accuracies
+    return losses, accuracies, accuracies_top3
 
 
 def validation_loop(dataloader, model, loss_fn, logger, epoch):
@@ -107,19 +117,26 @@ def validation_loop(dataloader, model, loss_fn, logger, epoch):
             y = torch.reshape(y, (-1, 81))
             val_loss += loss_fn(pred, y).item()
             correct += (pred.argmax(1) == y.argmax(1)).type(torch.float).sum().item()
+            
+            # Top-3 Accuracy, check if the correct move in top 3 move by the model
+            _, top3_pred = pred.topk(3, 1, True, True)
+            target = y.argmax(1).view(-1, 1)
+            correct_top3 += top3_pred.eq(target).sum().item()
 
     val_loss /= num_batches
     accuracy = 100 * correct / size
+    accuracy_top3 = 100 * correct_top3 / size
 
     logger.info(
-        f"Validation Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {val_loss:>8f} \n"
+        f"Validation Error: \n Accuracy: {(100*correct):>0.1f}%, Top-3 Accuracy: {accuracy_top3:>0.1f}%, Avg loss: {val_loss:>8f} \n"
     )
     wandb.log({
         "val_loss": val_loss,
         "val_accuracy": accuracy,
+        "val_accuracy_top3": accuracy_top3,
         "epoch": epoch
     })
-    return val_loss, accuracy
+    return val_loss, accuracy, accuracy_top3
 
 
 def plot_and_save(logs, file_name):
@@ -199,7 +216,7 @@ def train(
             final_div_factor=10000.0
         )
     
-    losses, losses_avg, accuracies, val_losses, val_accuracies = [], [], [], [], []
+    losses, losses_avg, accuracies, accuracies_top3, val_losses, val_accuracies, val_accuracies_top3 = [], [], [], [], [], [], []
 
     # Save initial config
     config = {
@@ -230,10 +247,10 @@ def train(
         if t % 20 == 0:
             torch.save(model.state_dict(), checkpoint_path)
 
-        losses_ep, accuracies_ep = train_loop(
+        losses_ep, accuracies_ep, accuracies_top3_ep = train_loop(
             training_generator, model, loss_fn, optimizer, logger, t+1, scheduler
         )
-        val_loss_ep, val_acc_ep = validation_loop(val_generator, model, loss_fn, logger, t+1)
+        val_loss_ep, val_acc_ep, val_acc_top3_ep = validation_loop(val_generator, model, loss_fn, logger, t+1)
         
         if scheduler_type == "ReduceLROnPlateau":
             scheduler.step(val_loss_ep)
@@ -247,9 +264,11 @@ def train(
 
         losses += losses_ep
         accuracies += accuracies_ep
+        accuracies_top3 += accuracies_top3_ep
         losses_avg += [loss_avg] * len(losses_ep)
         val_losses += [val_loss_ep] * len(losses_ep)
         val_accuracies += [val_acc_ep] * len(accuracies_ep)
+        val_accuracies_top3 += [val_acc_top3_ep] * len(accuracies_ep)
 
         plot_and_save(
             [
@@ -262,6 +281,10 @@ def train(
         plot_and_save(
             [(accuracies, "Train Accuracy"), (val_accuracies, "Validation Accuracy")],
             os.path.join(run_plot_folder, "accuracies.png"),
+        )
+        plot_and_save(
+            [(accuracies_top3, "Train Top-3 Accuracy"), (val_accuracies_top3, "Validation Top-3 Accuracy")],
+            os.path.join(run_plot_folder, "accuracies_top3.png"),
         )
 
     wandb.finish()
