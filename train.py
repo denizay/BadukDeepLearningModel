@@ -230,6 +230,7 @@ def train(
         "dropout": dropout,
         "scheduler_type": scheduler_type,
         "weight_decay": weight_decay,
+        "architecture": "Residual"
     }
     save_config(config, run_name)
 
