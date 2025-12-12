@@ -59,7 +59,6 @@ def train_loop(dataloader, model, loss_fn, optimizer, logger, epoch, scheduler=N
 
     for batch, (X, y, nm_color) in enumerate(dataloader):
         pred = model(X)
-        y = torch.reshape(y, (-1, 81))
         loss = loss_fn(pred, y)
 
         loss.backward()
@@ -114,7 +113,6 @@ def validation_loop(dataloader, model, loss_fn, logger, epoch):
     with torch.no_grad():
         for X, y, nm_color in dataloader:
             pred = model(X)
-            y = torch.reshape(y, (-1, 81))
             val_loss += loss_fn(pred, y).item()
             correct += (pred.argmax(1) == y.argmax(1)).type(torch.float).sum().item()
             

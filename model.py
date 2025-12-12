@@ -1,4 +1,3 @@
-import torch
 from torch import nn
 
 
@@ -47,7 +46,7 @@ class NeuralNetwork(nn.Module):
         )
 
         self.output_layer = nn.Linear(
-            board_size * board_size * 2, board_size * board_size
+            board_size * board_size * 2, board_size * board_size + 1
         )
 
     def forward(self, x):
