@@ -57,7 +57,10 @@ def train_loop(dataloader, model, loss_fn, optimizer, logger, epoch, scheduler=N
     size = len(dataloader.dataset)
     losses, accuracies, accuracies_top3 = [], [], []
 
-    for batch, (X, y, nm_color) in enumerate(dataloader):
+    for batch, (X, y, _nm_color) in enumerate(dataloader):
+        X = X.float()
+        y = y.float()
+
         pred = model(X)
         loss = loss_fn(pred, y)
 
@@ -111,7 +114,9 @@ def validation_loop(dataloader, model, loss_fn, logger, epoch):
     val_loss, correct, correct_top3 = 0, 0, 0
 
     with torch.no_grad():
-        for X, y, nm_color in dataloader:
+        for X, y, _nm_color in dataloader:
+            X = X.float()
+            y = y.float()
             pred = model(X)
             val_loss += loss_fn(pred, y).item()
             correct += (pred.argmax(1) == y.argmax(1)).type(torch.float).sum().item()

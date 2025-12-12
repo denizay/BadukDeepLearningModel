@@ -92,9 +92,9 @@ def get_positions(sgf_paths):
                 
                 data.append(
                     (torch.tensor(
-                        combined_pos, dtype=torch.float), torch.tensor(
-                        label_board, dtype=torch.float), torch.tensor(
-                        label_color, dtype=torch.float)))
+                        combined_pos, dtype=torch.int8), torch.tensor(
+                        label_board, dtype=torch.int8), torch.tensor(
+                        label_color, dtype=torch.int8)))
                         
         except Exception as e:
             print(f"Error processing {sgf_path}: {e}")
