@@ -6,9 +6,9 @@ from goban.stone import Stone, BLACK, WHITE
 
 
 BOARD_SIZE = 9
-N_SIZE = 256
-NUM_LAYERS = 4
-WEIGHTS_PATH = 'checkpoints/mw_256ns_4ls_0.001lr_100ep_256bs.pth'
+N_SIZE = 64
+NUM_LAYERS = 12
+WEIGHTS_PATH = 'checkpoints/20251212_001130/epoch_121.pth'
 
 
 def play(player_color):
