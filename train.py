@@ -25,9 +25,11 @@ LOG_FOLDER = "logs"
 PLOT_FOLDER = "plots"
 CHECKPOINT_FOLDER = "checkpoints"
 CONFIG_FOLDER = "configs"
-TRAIN_DATA_PATH = "data/train_data_big_t2.pkl"
-VAL_DATA_PATH = "data/validation_data_big_t2.pkl"
+TRAIN_DATA_PATH = "data/train_data_bigger.pkl"
+VAL_DATA_PATH = "data/validation_data_bigger.pkl"
 
+torch.set_float32_matmul_precision('high')
+torch.backends.cudnn.benchmark = True
 
 def setup_logger(log_file_path):
     os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
@@ -52,7 +54,7 @@ def save_config(config, run_name):
         json.dump(config, f, indent=4)
 
 
-def train_loop(dataloader, model, loss_fn, optimizer, logger, epoch, scheduler=None):
+def train_loop(dataloader, model, loss_fn, optimizer, logger, epoch, scaler, scheduler=None):
     model.train()
     size = len(dataloader.dataset)
     losses, accuracies, accuracies_top3 = [], [], []
@@ -61,11 +63,13 @@ def train_loop(dataloader, model, loss_fn, optimizer, logger, epoch, scheduler=N
         X = X.float()
         y = y.float()
 
-        pred = model(X)
-        loss = loss_fn(pred, y)
+        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+            pred = model(X)
+            loss = loss_fn(pred, y)
 
-        loss.backward()
-        optimizer.step()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
         optimizer.zero_grad()
 
         if isinstance(scheduler, OneCycleLR):
@@ -189,8 +193,9 @@ def train(
     model.compile()
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=learning_rate, weight_decay=weight_decay
+        model.parameters(), lr=learning_rate, weight_decay=weight_decay, fused=True
     )
+    scaler = torch.amp.GradScaler('cuda')
     
     scheduler = None
     if scheduler_type == "ReduceLROnPlateau":
@@ -238,7 +243,7 @@ def train(
     save_config(config, run_name)
 
     wandb.init(
-        project="BadukDeepLearning-CNN",
+        project="BadukDeepLearning-CNN-BiggerDataset",
         name=run_name,
         config=config
     )
@@ -254,7 +259,7 @@ def train(
             torch.save(model.state_dict(), checkpoint_path)
 
         losses_ep, accuracies_ep, accuracies_top3_ep = train_loop(
-            training_generator, model, loss_fn, optimizer, logger, t+1, scheduler
+            training_generator, model, loss_fn, optimizer, logger, t+1, scaler, scheduler
         )
         val_loss_ep, val_acc_ep, val_acc_top3_ep = validation_loop(val_generator, model, loss_fn, logger, t+1)
         
@@ -304,12 +309,12 @@ def main():
     val_set = GameDataset(VAL_DATA_PATH, DEVICE, prefetch=True)
 
     config_space = {
-        "num_planes": [64],
-        "num_layers": [12],
+        "num_planes": [64, 96],
+        "num_layers": [12, 18],
         "learning_rates": [0.001],
-        "epochs": [500],
+        "epochs": [10],
         "batch_sizes": [1024],
-        "dropouts": [0.2],
+        "dropouts": [0.0, 0.1, 0.2],
         "weight_decays": [1e-1],
         "scheduler_types": ["ReduceLROnPlateau"]
     }
