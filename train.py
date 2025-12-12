@@ -194,8 +194,8 @@ def train(
         scheduler = ReduceLROnPlateau(
             optimizer, 
             mode='min', 
-            factor=0.80
-            patience=10,
+            factor=0.50,
+            patience=5,
             min_lr=1e-7
         )
     elif scheduler_type == "CosineAnnealingWarmRestarts":
