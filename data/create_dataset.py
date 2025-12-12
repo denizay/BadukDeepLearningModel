@@ -6,8 +6,7 @@ import torch
 from sgfparser import get_all_moves
 
 
-SGF_FOLDER_PATH = "../all_games"
-BOARD_POS_COUNT = 16
+SGF_FOLDER_PATH = "all_games"
 
 
 def apply_symmetry(board, label, k):
@@ -72,27 +71,23 @@ def get_positions(sgf_paths):
             if not game_samples:
                 continue
                 
-            # Sample distinct moves
-            num_samples = len(game_samples)
-            if num_samples <= BOARD_POS_COUNT:
-                indices = np.arange(num_samples)
-            else:
-                indices = np.random.choice(num_samples, BOARD_POS_COUNT, replace=False)
-            
-            for i, idx in enumerate(indices):
-                board_matrix, label_board, label_color, is_pass = game_samples[idx]
+            # Use all positions - no sampling
+            for sample in game_samples:
+                original_board, original_label, label_color, is_pass = sample
                 
-                # Apply symmetries sequentially
-                k = i % 8
-                board_matrix, label_board = apply_symmetry(board_matrix, label_board, k)
-                label_board = np.append(label_board, 1 if is_pass else 0)
+                # Apply ALL 8 symmetries for EACH position
+                for k in range(8):
+                    board_matrix, label_board = apply_symmetry(original_board, original_label, k)
+                    
+                    # Append pass indicator
+                    label_board = np.append(label_board, 1 if is_pass else 0)
 
-                # Transform to 3 planes
-                combined_pos = transform_to_three_planes(board_matrix, label_color)
-                
-                boards.append(torch.tensor(combined_pos, dtype=torch.int8))
-                label_boards.append(torch.tensor(label_board, dtype=torch.int8))
-                label_colors.append(torch.tensor(label_color, dtype=torch.int8))
+                    # Transform to 3 planes
+                    combined_pos = transform_to_three_planes(board_matrix, label_color)
+                    
+                    boards.append(torch.tensor(combined_pos, dtype=torch.int8))
+                    label_boards.append(torch.tensor(label_board, dtype=torch.int8))
+                    label_colors.append(torch.tensor(label_color, dtype=torch.int8))
                         
         except Exception as e:
             print(f"Error processing {sgf_path}: {e}")
@@ -110,24 +105,24 @@ def main():
     sgf_count = len(sgf_paths)
 
     train_paths, val_paths, test_paths = np.split(np.random.permutation(
-        sgf_paths), [int(.75 * sgf_count), int(.875 * sgf_count)])
+        sgf_paths), [int(.90 * sgf_count), int(.95 * sgf_count)])
 
     train_data, train_fc = get_positions(train_paths)
     val_data, val_fc = get_positions(val_paths)
     test_data, test_fc = get_positions(test_paths)
 
-    with open('train_data_big.pkl', 'wb') as f:
+    with open('train_data_bigger.pkl', 'wb') as f:
         torch.save(train_data, f)
 
-    with open('validation_data_big.pkl', 'wb') as f:
+    with open('validation_data_bigger.pkl', 'wb') as f:
         torch.save(val_data, f)
 
-    with open('test_data_big.pkl', 'wb') as f:
+    with open('test_data_bigger.pkl', 'wb') as f:
         torch.save(test_data, f)
 
-    print(f"Train data length: {len(train_data)}")
-    print(f"Val data length: {len(val_data)}")
-    print(f"Test data length: {len(test_data)}")
+    print(f"Train data length: {len(train_data["boards"])}")
+    print(f"Val data length: {len(val_data["boards"])}")
+    print(f"Test data length: {len(test_data["boards"])}")
     fail_count = train_fc + test_fc + val_fc
     print(f"Fail count: {fail_count}")
 
