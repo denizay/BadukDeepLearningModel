@@ -6,7 +6,7 @@ import torch
 from sgfparser import get_all_moves
 
 
-SGF_FOLDER_PATH = "sgfs"
+SGF_FOLDER_PATH = "../all_games"
 BOARD_POS_COUNT = 16
 
 
@@ -25,6 +25,37 @@ def apply_symmetry(board, label, k):
         label = np.rot90(label, k=k)
         
     return board.copy(), label.copy()
+
+
+def transform_to_three_planes(board_matrix, turn):
+    """
+    Transform turn-based board matrix into 3-plane representation.
+    turn: 1.0 for Black, -1.0 for White
+    """
+    H, W = board_matrix.shape
+    combined_pos = np.zeros((3, H, W), dtype=np.float32)
+
+    if turn == 1.0:
+        # Black's turn
+        me_val = 1.0
+        opp_val = -1.0
+        color_plane_val = 1.0
+    else:
+        # White's turn
+        me_val = -1.0
+        opp_val = 1.0
+        color_plane_val = 0.0
+
+    # Plane 0: Current player's stones
+    combined_pos[0] = (board_matrix == me_val).astype(np.float32)
+    
+    # Plane 1: Opponent's stones
+    combined_pos[1] = (board_matrix == opp_val).astype(np.float32)
+
+    # Plane 2: Color to play
+    combined_pos[2] = color_plane_val
+
+    return combined_pos
 
 
 def get_positions(sgf_paths):
@@ -49,15 +80,19 @@ def get_positions(sgf_paths):
                 indices = np.random.choice(num_samples, BOARD_POS_COUNT, replace=False)
             
             for i, idx in enumerate(indices):
-                board_matrix, label_board, label_color = game_samples[idx]
+                board_matrix, label_board, label_color, is_pass = game_samples[idx]
                 
                 # Apply symmetries sequentially
                 k = i % 8
                 board_matrix, label_board = apply_symmetry(board_matrix, label_board, k)
+                label_board = np.append(label_board, 1 if is_pass else 0)
+
+                # Transform to 3 planes
+                combined_pos = transform_to_three_planes(board_matrix, label_color)
                 
                 data.append(
                     (torch.tensor(
-                        board_matrix, dtype=torch.float), torch.tensor(
+                        combined_pos, dtype=torch.float), torch.tensor(
                         label_board, dtype=torch.float), torch.tensor(
                         label_color, dtype=torch.float)))
                         
