@@ -163,6 +163,5 @@ cython_debug/
 
 # project data folders
 checkpoints/
-data/
-!data/*.py
+data/*.pkl
 plots/

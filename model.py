@@ -3,17 +3,16 @@ from torch import nn
 
 
 class ResidualBlock(nn.Module):
-    def __init__(self, n_size, dropout=0.0):
+    def __init__(self, num_planes, dropout=0.0):
         super().__init__()
         self.block = nn.Sequential(
-            nn.Linear(n_size, n_size),
-            nn.BatchNorm1d(n_size),
+            nn.Conv2d(num_planes, num_planes, 3, padding=1),
+            nn.BatchNorm2d(num_planes),
             nn.ReLU(),
             nn.Dropout(dropout),
-            
-            nn.Linear(n_size, n_size),
-            nn.BatchNorm1d(n_size),
-            nn.Dropout(dropout)
+            nn.Conv2d(num_planes, num_planes, 3, padding=1),
+            nn.BatchNorm2d(num_planes),
+            nn.Dropout(dropout),
         )
         self.relu = nn.ReLU()
 
@@ -26,29 +25,35 @@ class ResidualBlock(nn.Module):
 
 
 class NeuralNetwork(nn.Module):
-    def __init__(self, board_size, n_size, num_layers=1, dropout=0.0):
+    def __init__(self, board_size, num_planes=128, num_layers=1, dropout=0.0):
         super().__init__()
         self.flatten = nn.Flatten()
 
         self.input_layer = nn.Sequential(
-            nn.Linear(board_size * board_size + 1, n_size),
-            nn.ReLU()
+            # blacks, whites, turn, 3 features for input
+            nn.Conv2d(3, num_planes, 3, padding=1),
+            nn.BatchNorm2d(num_planes),
+            nn.ReLU(),
         )
 
         blocks = []
         for _ in range(num_layers):
-            blocks.append(ResidualBlock(n_size, dropout))
-        
+            blocks.append(ResidualBlock(num_planes, dropout))
+
         self.hidden_layers = nn.Sequential(*blocks)
 
-        self.output_layer = nn.Linear(n_size, board_size * board_size)
+        self.policy_reduce = nn.Sequential(
+            nn.Conv2d(num_planes, 2, 1), nn.BatchNorm2d(2), nn.ReLU()
+        )
 
-    def forward(self, x, nm_color):
-        x = self.flatten(x)
-        nm_color = nm_color.reshape(-1, 1)
-        x = torch.cat((x, nm_color), dim=1)
-        
+        self.output_layer = nn.Linear(
+            board_size * board_size * 2, board_size * board_size
+        )
+
+    def forward(self, x):
         x = self.input_layer(x)
         x = self.hidden_layers(x)
+        x = self.policy_reduce(x)
+        x = self.flatten(x)
         logits = self.output_layer(x)
         return logits
