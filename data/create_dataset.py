@@ -59,7 +59,7 @@ def transform_to_three_planes(board_matrix, turn):
 
 
 def get_positions(sgf_paths):
-    data = []
+    boards, label_boards, label_colors = [], [], []
     fail_count = 0
     for sgf_path in tqdm(sgf_paths):
         try:
@@ -90,15 +90,18 @@ def get_positions(sgf_paths):
                 # Transform to 3 planes
                 combined_pos = transform_to_three_planes(board_matrix, label_color)
                 
-                data.append(
-                    (torch.tensor(
-                        combined_pos, dtype=torch.int8), torch.tensor(
-                        label_board, dtype=torch.int8), torch.tensor(
-                        label_color, dtype=torch.int8)))
+                boards.append(torch.tensor(combined_pos, dtype=torch.int8))
+                label_boards.append(torch.tensor(label_board, dtype=torch.int8))
+                label_colors.append(torch.tensor(label_color, dtype=torch.int8))
                         
         except Exception as e:
             print(f"Error processing {sgf_path}: {e}")
             fail_count += 1
+    data = {
+        "boards": torch.stack(boards),
+        "label_boards": torch.stack(label_boards),
+        "label_colors": torch.stack(label_colors)
+    }
     return data, fail_count
 
 
