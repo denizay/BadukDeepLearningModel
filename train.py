@@ -9,7 +9,7 @@ import wandb
 import torch
 from torch import nn
 from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingWarmRestarts, OneCycleLR
-from matplotlib import pyplot as plt
+# from matplotlib import pyplot as plt
 from tqdm import tqdm
 
 from dataset import GameDataset
@@ -25,8 +25,8 @@ LOG_FOLDER = "logs"
 PLOT_FOLDER = "plots"
 CHECKPOINT_FOLDER = "checkpoints"
 CONFIG_FOLDER = "configs"
-TRAIN_DATA_PATH = "data/train_data_big.pkl"
-VAL_DATA_PATH = "data/validation_data_big.pkl"
+TRAIN_DATA_PATH = "data/train_data_big_t2.pkl"
+VAL_DATA_PATH = "data/validation_data_big_t2.pkl"
 
 
 def setup_logger(log_file_path):
@@ -58,7 +58,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, logger, epoch, scheduler=N
     losses, accuracies, accuracies_top3 = [], [], []
 
     for batch, (X, y, nm_color) in enumerate(dataloader):
-        pred = model(X, nm_color)
+        pred = model(X)
         y = torch.reshape(y, (-1, 81))
         loss = loss_fn(pred, y)
 
@@ -113,7 +113,7 @@ def validation_loop(dataloader, model, loss_fn, logger, epoch):
 
     with torch.no_grad():
         for X, y, nm_color in dataloader:
-            pred = model(X, nm_color)
+            pred = model(X)
             y = torch.reshape(y, (-1, 81))
             val_loss += loss_fn(pred, y).item()
             correct += (pred.argmax(1) == y.argmax(1)).type(torch.float).sum().item()
@@ -230,12 +230,12 @@ def train(
         "dropout": dropout,
         "scheduler_type": scheduler_type,
         "weight_decay": weight_decay,
-        "architecture": "Residual"
+        "architecture": "CNN+Res Blocks"
     }
     save_config(config, run_name)
 
     wandb.init(
-        project="BadukDeepLearning",
+        project="BadukDeepLearning-CNN",
         name=run_name,
         config=config
     )
@@ -273,22 +273,22 @@ def train(
         val_accuracies += [val_acc_ep] * len(accuracies_ep)
         val_accuracies_top3 += [val_acc_top3_ep] * len(accuracies_ep)
 
-        plot_and_save(
-            [
-                (losses, "Train Loss"),
-                (losses_avg, "Train Avg Loss"),
-                (val_losses, "Validation Loss"),
-            ],
-            os.path.join(run_plot_folder, "loss.png"),
-        )
-        plot_and_save(
-            [(accuracies, "Train Accuracy"), (val_accuracies, "Validation Accuracy")],
-            os.path.join(run_plot_folder, "accuracies.png"),
-        )
-        plot_and_save(
-            [(accuracies_top3, "Train Top-3 Accuracy"), (val_accuracies_top3, "Validation Top-3 Accuracy")],
-            os.path.join(run_plot_folder, "accuracies_top3.png"),
-        )
+        # plot_and_save(
+        #     [
+        #         (losses, "Train Loss"),
+        #         (losses_avg, "Train Avg Loss"),
+        #         (val_losses, "Validation Loss"),
+        #     ],
+        #     os.path.join(run_plot_folder, "loss.png"),
+        # )
+        # plot_and_save(
+        #     [(accuracies, "Train Accuracy"), (val_accuracies, "Validation Accuracy")],
+        #     os.path.join(run_plot_folder, "accuracies.png"),
+        # )
+        # plot_and_save(
+        #     [(accuracies_top3, "Train Top-3 Accuracy"), (val_accuracies_top3, "Validation Top-3 Accuracy")],
+        #     os.path.join(run_plot_folder, "accuracies_top3.png"),
+        # )
 
     wandb.finish()
     return min(val_losses), max(val_accuracies)
@@ -301,12 +301,12 @@ def main():
     val_set = GameDataset(VAL_DATA_PATH, DEVICE, prefetch=True)
 
     config_space = {
-        "n_sizes": [2048, 4096],
-        "num_layers": [3],
-        "learning_rates": [0.01],
-        "epochs": [900],
+        "num_planes": [64],
+        "num_layers": [12],
+        "learning_rates": [0.001],
+        "epochs": [500],
         "batch_sizes": [1024],
-        "dropouts": [0.1],
+        "dropouts": [0.2],
         "weight_decays": [1e-1],
         "scheduler_types": ["ReduceLROnPlateau"]
     }

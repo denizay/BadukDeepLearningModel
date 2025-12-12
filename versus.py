@@ -36,11 +36,7 @@ def play(player_color):
             coords = (int(coords[0]) - 1, ord(coords[1].upper()) - 65)
 
         else:
-            t_board = torch.tensor(board.board, dtype=torch.float)
-            t_color = torch.tensor([color], dtype=torch.float)
-            t_board = t_board.reshape(1, 9, 9)
-
-            m_move = model(t_board, t_color)
+            m_move = model(board.board_cnn_mode(color).unsqueeze(0))
 
             row, col = divmod(m_move.argmax().item(), 9)
             print(f"row: {row + 1}, col: {col + 1}")

@@ -2,6 +2,7 @@ import os
 import time
 import random
 import numpy as np
+import torch
 
 ## 1: Black, -1: White
 class Stone:
@@ -21,6 +22,33 @@ class Board:
 
     def __repr__(self):
         return f"board size: {self.board_size}"
+    
+    def board_cnn_mode(self, turn):
+        combined_pos = torch.zeros((3, self.board_size, self.board_size), dtype=torch.float32)
+
+        if turn == 1:
+            # It's Black's turn
+            me_val = 1       # Black stones are 1
+            opp_val = -1     # White stones are -1
+            color_plane_val = 1.0 # "1 if black is to play"
+        else:
+            # It's White's turn
+            me_val = -1      # White stones are -1
+            opp_val = 1      # Black stones are 1
+            color_plane_val = 0.0 # "0 if white is to play"
+
+        self.board = torch.tensor(self.board, dtype=torch.float32)
+
+        combined_pos[0] = (self.board == me_val)
+
+        # Channel 1: "Yt" -> Presence of OPPONENT'S stones
+        combined_pos[1] = (self.board == opp_val)
+
+        # Channel 2: "C" -> Colour to play (Constant plane)
+        combined_pos[2].fill_(color_plane_val)
+
+        return combined_pos
+
 
     def print_board(self):
         print("  A B C D E F G H I")
