@@ -140,18 +140,13 @@ def get_all_moves(sgf_content):
         else:
             continue # Skip if next move is invalid
 
-        # Skip passes for label generation if desired, or handle them.
-        # The original code skipped passes for labels: "not check_pass(label_move)"
-        if len(next_move[2:4]) == 2 and not check_pass(next_move):
+        label_board = np.zeros(board_size * board_size + 1, dtype=int)
+        if check_pass(next_move):
+            label_board[-1] = 1
+        else:
             label_row, label_col = parse_position(next_move[2:4])
-            
-            # Create label board (all zeros except target)
-            label_board = np.zeros((board_size, board_size), dtype=int)
-            label_board[label_row, label_col] = 1
-            
-            # Append copy of current board, label, and color
-            # Note: We append the board state AFTER the current move is played, 
-            # which is the state used to predict the NEXT move.
-            game_samples.append((board.copy(), label_board, label_color))
+            label_board[label_row * board_size + label_col] = 1
+        
+        game_samples.append((board.copy(), label_board, label_color))
 
     return game_samples
