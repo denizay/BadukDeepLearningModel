@@ -63,50 +63,79 @@ def train_loop(dataloader, model, loss_fn, optimizer, logger, epoch, scaler, sch
         X = X.float()
         y = y.float()
 
+        optimizer.zero_grad(set_to_none=True)
+
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
             pred = model(X)
             loss = loss_fn(pred, y)
 
         scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
-        optimizer.zero_grad()
 
-        if isinstance(scheduler, OneCycleLR):
-            scheduler.step()
+        scaler.unscale_(optimizer)
+
 
         if batch % 1000 == 0:
             batch_size = len(X)
-            # loss, current = loss.item(), batch * batch_size+ len(X)
             current = batch * batch_size + len(X)
-            # correct = (pred.argmax(1) == y.argmax(1)).type(torch.float).sum().item()
-            correct = (pred.argmax(1) == y.argmax(1)).sum().item()
-            accuracy = 100 * correct / batch_size
+            
+            # --- Calculate Metrics  ---
+            with torch.no_grad():
+                # Basic Accuracy
+                correct = (pred.argmax(1) == y.argmax(1)).sum().item()
+                accuracy = 100 * correct / batch_size
 
-            # Top-3 Accuracy
-            _, top3_pred = pred.topk(3, 1, True, True)
-            correct_top3 = 0
-            target = y.argmax(1).view(-1, 1)
-            correct_top3 += top3_pred.eq(target).sum().item()
-            accuracy_top3 = 100 * correct_top3 / batch_size
+                # Top-3 Accuracy
+                _, top3_pred = pred.topk(3, 1, True, True)
+                target = y.argmax(1).view(-1, 1)
+                correct_top3 = top3_pred.eq(target).sum().item()
+                accuracy_top3 = 100 * correct_top3 / batch_size
 
+                # --- Policy Metrics ---
+                probs = torch.softmax(pred, dim=1)
+                log_probs = torch.log_softmax(pred, dim=1)
+                
+                # Entropy: How confused is the model? (Higher = Random, Lower = Confident)
+                entropy = -(probs * log_probs).sum(dim=1).mean().item()
+                
+                # Confidence: Average probability of the chosen move
+                confidence = probs.max(dim=1)[0].mean().item()
+                
+                # Pass Rate: Probability of the 'Pass' move
+                pass_prob = probs[:, -1].mean().item()
+
+                # Norms: Check for exploding/vanishing gradients and weight decay issues
+                grad_norm, weight_norm = get_model_norms(model)
+
+            # Store history
             losses.append(loss.item())
             accuracies.append(accuracy)
             accuracies_top3.append(accuracy_top3)
 
-            logger.info(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
-            logger.info(f"Accuracy: {100*correct/batch_size}")
-            logger.info(f"Top-3 Accuracy: {accuracy_top3}")
-            logger.info(f"max pred: {torch.max(pred[0])}")
+            logger.info(f"loss: {loss.item():>7f}  [{current:>5d}/{size:>5d}]")
+            logger.info(f"Acc: {accuracy:.1f}%, Top-3: {accuracy_top3:.1f}%")
+            logger.info(f"Ent: {entropy:.4f}, Conf: {confidence:.4f}, Pass: {pass_prob:.4f}")
+            logger.info(f"Grad Norm: {grad_norm:.4f}, Weight Norm: {weight_norm:.4f}")
             
             wandb.log({
                 "train_loss": loss.item(),
                 "train_accuracy": accuracy,
                 "train_accuracy_top3": accuracy_top3,
+                "policy_entropy": entropy,
+                "avg_confidence": confidence,
+                "pass_prob_avg": pass_prob,
+                "grad_norm": grad_norm,
+                "weight_norm": weight_norm,
                 "epoch": epoch,
                 "batch": batch,
-                "step": (epoch - 1) * len(dataloader) + batch
+                "step": (epoch - 1) * len(dataloader) + batch,
+                "learning_rate": optimizer.param_groups[0]['lr']
             })
+
+        scaler.step(optimizer)
+        scaler.update()
+
+        if isinstance(scheduler, OneCycleLR):
+            scheduler.step()
 
     return losses, accuracies, accuracies_top3
 
@@ -156,6 +185,23 @@ def plot_and_save(logs, file_name):
     fig.clf()
     plt.close(fig)
 
+def get_model_norms(model):
+    # Calculate Gradient Norm (how big are the steps?)
+    total_grad_norm = 0.0
+    for p in model.parameters():
+        if p.grad is not None:
+            param_norm = p.grad.detach().data.norm(2)
+            total_grad_norm += param_norm.item() ** 2
+    total_grad_norm = total_grad_norm ** 0.5
+
+    # Calculate Weight Norm (how big are the parameters?)
+    total_weight_norm = 0.0
+    for p in model.parameters():
+        param_norm = p.detach().data.norm(2)
+        total_weight_norm += param_norm.item() ** 2
+    total_weight_norm = total_weight_norm ** 0.5
+    
+    return total_grad_norm, total_weight_norm
 
 def train(
     train_set,
@@ -238,7 +284,8 @@ def train(
         "dropout": dropout,
         "scheduler_type": scheduler_type,
         "weight_decay": weight_decay,
-        "architecture": "CNN+Res Blocks"
+        "architecture": "CNN+Res Blocks",
+        "grad_clipping": False,
     }
     save_config(config, run_name)
 
