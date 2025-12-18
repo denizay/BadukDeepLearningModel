@@ -8,90 +8,140 @@ from sgfparser import get_all_moves
 
 SGF_FOLDER_PATH = "all_games"
 
+# History Length: How many past moves to include.
+# 3 means: Current Board + 3 Previous Boards = 4 Time Steps total.
+# Input Depth will be: (HISTORY_LENGTH + 1) * 2 + 1
+# For HISTORY_LENGTH=3, Depth = 9 planes.
+HISTORY_LENGTH = 3 
 
-def apply_symmetry(board, label, k):
+def apply_symmetry(input_volume, label, k):
     """
-    Apply one of 8 symmetries to the board and label.
+    Apply one of 8 symmetries to the input volume and label.
+    input_volume: (Depth, H, W)
+    label: (H, W)
     k: 0-7
     """
+    # Create copies to avoid mutating original data
+    vol = input_volume.copy()
+    lbl = label.copy()
+
     if k >= 4:
-        board = np.flip(board, axis=0)
-        label = np.flip(label, axis=0)
+        # Flip along Height (axis 1 for volume, axis 0 for label)
+        vol = np.flip(vol, axis=1)
+        lbl = np.flip(lbl, axis=0)
         k -= 4
     
     if k > 0:
-        board = np.rot90(board, k=k)
-        label = np.rot90(label, k=k)
+        # Rot90 rotates the first two axes by default.
+        # For volume (C, H, W), we want to rotate H, W (axes 1, 2)
+        vol = np.rot90(vol, k=k, axes=(1, 2))
+        # For label (H, W), we want to rotate axes 0, 1
+        lbl = np.rot90(lbl, k=k, axes=(0, 1))
         
-    return board.copy(), label.copy()
+    return vol.copy(), lbl.copy()
 
 
-def transform_to_three_planes(board_matrix, turn):
+def encode_history_planes(game_samples, current_idx, history_len):
     """
-    Transform turn-based board matrix into 3-plane representation.
-    turn: 1.0 for Black, -1.0 for White
+    Construct input planes using history.
+    game_samples: List of (board, label, color, pass)
+    current_idx: Index of the current move in game_samples
     """
-    H, W = board_matrix.shape
-    combined_pos = np.zeros((3, H, W), dtype=np.float32)
-
-    if turn == 1.0:
-        # Black's turn
-        me_val = 1.0
-        opp_val = -1.0
-        color_plane_val = 1.0
-    else:
-        # White's turn
-        me_val = -1.0
-        opp_val = 1.0
-        color_plane_val = 0.0
-
-    # Plane 0: Current player's stones
-    combined_pos[0] = (board_matrix == me_val).astype(np.float32)
+    # Get the state at the current index
+    # We only need the 'color' from the current sample to determine perspective
+    _, _, curr_turn_color, _ = game_samples[current_idx]
     
-    # Plane 1: Opponent's stones
-    combined_pos[1] = (board_matrix == opp_val).astype(np.float32)
+    planes = []
+    
+    # Iterate from current (0) back to history_len
+    for i in range(history_len + 1):
+        prev_idx = current_idx - i
+        
+        # If we go before the start of the game, use an empty board (padding)
+        if prev_idx >= 0:
+            board_state = game_samples[prev_idx][0]
+        else:
+            # Assume 9x9 based on current sample or default
+            # (Fetching shape from current sample to be safe)
+            h, w = game_samples[current_idx][0].shape
+            board_state = np.zeros((h, w), dtype=np.float32)
 
-    # Plane 2: Color to play
-    combined_pos[2] = color_plane_val
+        # Generate 2 planes for this time step:
+        # 1. My Stones (relative to CURRENT player)
+        # 2. Opponent Stones (relative to CURRENT player)
+        
+        if curr_turn_color == 1.0: # Current player is Black
+            my_stones = (board_state == 1.0)
+            opp_stones = (board_state == -1.0)
+        else: # Current player is White
+            my_stones = (board_state == -1.0)
+            opp_stones = (board_state == 1.0)
 
-    return combined_pos
+        planes.append(my_stones.astype(np.float32))
+        planes.append(opp_stones.astype(np.float32))
+
+    # Add Color Plane (Last plane)
+    # 1.0 if Black to play, 0.0 if White to play
+    color_val = 1.0 if curr_turn_color == 1.0 else 0.0
+    
+    # Use shape from the last processed board
+    h, w = planes[0].shape
+    color_plane = np.full((h, w), color_val, dtype=np.float32)
+    planes.append(color_plane)
+
+    # Stack all planes: Shape (Depth, H, W)
+    return np.stack(planes)
 
 
 def get_positions(sgf_paths):
     boards, label_boards, label_colors = [], [], []
     fail_count = 0
+    
     for sgf_path in tqdm(sgf_paths):
         try:
             with open(sgf_path, 'r', encoding='utf-8') as f:
                 sgf_data = f.read()
             
-            # Get all valid moves/states from the game
             game_samples = get_all_moves(sgf_data)
             
             if not game_samples:
                 continue
                 
-            # Use all positions - no sampling
-            for sample in game_samples:
-                original_board, original_label, label_color, is_pass = sample
+            # Iterate through all moves in the game
+            for i in range(len(game_samples)):
+                # Extract components from current sample
+                # Note: We don't use 'original_board' directly here anymore
+                # because 'encode_history_planes' handles retrieval
+                _, original_label, label_color, is_pass = game_samples[i]
                 
-                # Apply ALL 8 symmetries for EACH position
+                # Create the stacked input volume with history
+                input_volume = encode_history_planes(game_samples, i, HISTORY_LENGTH)
+                
+                # Apply ALL 8 symmetries
                 for k in range(8):
-                    board_matrix, label_board = apply_symmetry(original_board, original_label, k)
+                    sym_vol, sym_label = apply_symmetry(input_volume, original_label, k)
                     
-                    # Append pass indicator
-                    label_board = np.append(label_board, 1 if is_pass else 0)
+                    # Append pass indicator to label
+                    # Label shape becomes (H*W + 1) effectively when flattened, 
+                    # but here we keep (H, W) plus separate pass flag later or append now.
+                    # Your previous code appended to flattened or kept separate?
+                    # Previous code: np.append(label_board, 1 if is_pass else 0)
+                    # We will flatten label here for consistency with that logic
+                    
+                    flat_label = sym_label.flatten()
+                    flat_label = np.append(flat_label, 1 if is_pass else 0)
 
-                    # Transform to 3 planes
-                    combined_pos = transform_to_three_planes(board_matrix, label_color)
-                    
-                    boards.append(torch.tensor(combined_pos, dtype=torch.int8))
-                    label_boards.append(torch.tensor(label_board, dtype=torch.int8))
-                    label_colors.append(torch.tensor(label_color, dtype=torch.int8))
+                    boards.append(torch.tensor(sym_vol, dtype=torch.float32)) # Float for CNN inputs
+                    label_boards.append(torch.tensor(flat_label, dtype=torch.float32))
+                    label_colors.append(torch.tensor(label_color, dtype=torch.float32))
                         
         except Exception as e:
             print(f"Error processing {sgf_path}: {e}")
             fail_count += 1
+            
+    if not boards:
+        return {"boards": [], "label_boards": [], "label_colors": []}, fail_count
+
     data = {
         "boards": torch.stack(boards),
         "label_boards": torch.stack(label_boards),
@@ -101,30 +151,49 @@ def get_positions(sgf_paths):
 
 
 def main():
-    sgf_paths = glob(os.path.join(SGF_FOLDER_PATH, "*.sgf"))
+    if not os.path.exists(SGF_FOLDER_PATH):
+        print(f"Folder {SGF_FOLDER_PATH} not found.")
+        return
+
+    sgf_paths = glob(os.path.join(SGF_FOLDER_PATH, "*.sgf"))[:5000]
     sgf_count = len(sgf_paths)
+    
+    if sgf_count == 0:
+        print("No SGF files found.")
+        return
 
-    train_paths, val_paths, test_paths = np.split(np.random.permutation(
-        sgf_paths), [int(.90 * sgf_count), int(.95 * sgf_count)])
+    # Shuffle and Split
+    shuffled_paths = np.random.permutation(sgf_paths)
+    train_paths, val_paths, test_paths = np.split(shuffled_paths, 
+                                                  [int(.90 * sgf_count), int(.95 * sgf_count)])
 
+    print("Processing Training Data...")
     train_data, train_fc = get_positions(train_paths)
+    
+    print("Processing Validation Data...")
     val_data, val_fc = get_positions(val_paths)
+    
+    print("Processing Test Data...")
     test_data, test_fc = get_positions(test_paths)
 
-    with open('train_data_bigger.pkl', 'wb') as f:
+    # Save
+    with open('train_data_history.pkl', 'wb') as f:
         torch.save(train_data, f)
 
-    with open('validation_data_bigger.pkl', 'wb') as f:
+    with open('validation_data_history.pkl', 'wb') as f:
         torch.save(val_data, f)
 
-    with open('test_data_bigger.pkl', 'wb') as f:
+    with open('test_data_history.pkl', 'wb') as f:
         torch.save(test_data, f)
 
-    print(f"Train data length: {len(train_data["boards"])}")
-    print(f"Val data length: {len(val_data["boards"])}")
-    print(f"Test data length: {len(test_data["boards"])}")
+    if len(train_data["boards"]) > 0:
+        print(f"Input Shape: {train_data['boards'][0].shape}") # Should be (9, 9, 9) or similar
+        print(f"Train samples: {len(train_data['boards'])}")
+        print(f"Val samples: {len(val_data['boards'])}")
+        print(f"Test samples: {len(test_data['boards'])}")
+    
     fail_count = train_fc + test_fc + val_fc
-    print(f"Fail count: {fail_count}")
+    print(f"Total failures: {fail_count}")
 
 
 if __name__ == '__main__':

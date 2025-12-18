@@ -28,9 +28,10 @@ LOG_FOLDER = "logs"
 PLOT_FOLDER = "plots"
 CHECKPOINT_FOLDER = "checkpoints"
 CONFIG_FOLDER = "configs"
-TRAIN_DATA_PATH = "data/validation_data_bigger.pkl"
-VAL_DATA_PATH = "data/validation_data_bigger.pkl"
+TRAIN_DATA_PATH = "data/train_data_history.pkl"
+VAL_DATA_PATH = "data/validation_data_history.pkl"
 MAX_NORM = 2.0
+HISTORY_LENGTH = 3
 
 
 if DEVICE.type == "cuda":
@@ -242,7 +243,7 @@ def train(
         val_set, batch_size=batch_size, shuffle=True
     )
 
-    model = NeuralNetwork(board_size, n_size, num_layer, dropout).to(DEVICE)
+    model = NeuralNetwork(board_size, HISTORY_LENGTH, n_size, num_layer, dropout).to(DEVICE)
     if DEVICE.type == "cuda":
         model.compile()
     loss_fn = nn.CrossEntropyLoss()

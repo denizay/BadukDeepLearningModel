@@ -24,13 +24,14 @@ class ResidualBlock(nn.Module):
 
 
 class NeuralNetwork(nn.Module):
-    def __init__(self, board_size, num_planes=128, num_layers=1, dropout=0.0):
+    def __init__(self, board_size, history_length, num_planes=128, num_layers=1, dropout=0.0):
         super().__init__()
         self.flatten = nn.Flatten()
 
+        input_channels = (1 + history_length) * 2 + 1
         self.input_layer = nn.Sequential(
             # blacks, whites, turn, 3 features for input
-            nn.Conv2d(3, num_planes, 3, padding=1),
+            nn.Conv2d(input_channels, num_planes, 3, padding=1),
             nn.BatchNorm2d(num_planes),
             nn.ReLU(),
         )
