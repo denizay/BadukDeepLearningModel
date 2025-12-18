@@ -32,6 +32,8 @@ TRAIN_DATA_PATH = "data/train_data_history.pkl"
 VAL_DATA_PATH = "data/validation_data_history.pkl"
 MAX_NORM = 2.0
 HISTORY_LENGTH = 3
+OPTIMIZER = "SGD"
+BS = 1024
 
 
 if DEVICE.type == "cuda":
@@ -62,12 +64,18 @@ def save_config(config, run_name):
         json.dump(config, f, indent=4)
 
 
-def train_loop(dataloader, model, loss_fn, optimizer, logger, epoch, scaler, scheduler=None):
+def train_loop(dataset, model, loss_fn, optimizer, logger, epoch, scaler, scheduler=None):
     model.train()
-    size = len(dataloader.dataset)
+    size = len(dataset)
     losses, accuracies, accuracies_top3 = [], [], []
 
-    for batch, (X, y, _nm_color) in enumerate(dataloader):
+    indices = torch.randperm(size, device=DEVICE)
+
+    for batch, (start_idx) in enumerate(range(0, size, BS)):
+        batch_idx = indices[start_idx : start_idx + BS]
+        X = dataset.boards[batch_idx]
+        y = dataset.label_boards[batch_idx]
+
         X = X.float()
         y = y.float()
 
@@ -135,7 +143,7 @@ def train_loop(dataloader, model, loss_fn, optimizer, logger, epoch, scaler, sch
                 "weight_norm": weight_norm,
                 "epoch": epoch,
                 "batch": batch,
-                "step": (epoch - 1) * len(dataloader) + batch,
+                # "step": (epoch - 1) * len(dataloader) + batch,
                 "learning_rate": optimizer.param_groups[0]['lr']
             })
 
@@ -148,14 +156,18 @@ def train_loop(dataloader, model, loss_fn, optimizer, logger, epoch, scaler, sch
     return losses, accuracies, accuracies_top3
 
 
-def validation_loop(dataloader, model, loss_fn, logger, epoch):
+def validation_loop(dataset, model, loss_fn, logger, epoch):
     model.eval()
-    size = len(dataloader.dataset)
-    num_batches = len(dataloader)
+    size = len(dataset)
+    num_batches = 0
     val_loss, correct, correct_top3 = 0, 0, 0
+    indices = torch.arange(size)
 
     with torch.no_grad():
-        for X, y, _nm_color in dataloader:
+        for start_idx in range(0, size, BS):
+            batch_idx = indices[start_idx : start_idx + BS]
+            X = dataset.boards[batch_idx]
+            y = dataset.label_boards[batch_idx]
             X = X.float()
             y = y.float()
             pred = model(X)
@@ -166,6 +178,7 @@ def validation_loop(dataloader, model, loss_fn, logger, epoch):
             _, top3_pred = pred.topk(3, 1, True, True)
             target = y.argmax(1).view(-1, 1)
             correct_top3 += top3_pred.eq(target).sum().item()
+            num_batches+=1
 
     val_loss /= num_batches
     accuracy = 100 * correct / size
@@ -236,20 +249,33 @@ def train(
 
     logger = setup_logger(run_log_path)
 
-    training_generator = torch.utils.data.DataLoader(
-        train_set, batch_size=batch_size, shuffle=True
-    )
-    val_generator = torch.utils.data.DataLoader(
-        val_set, batch_size=batch_size, shuffle=True
-    )
+    # training_generator = torch.utils.data.DataLoader(
+        # train_set, batch_size=batch_size, shuffle=True
+    # )
+    # val_generator = torch.utils.data.DataLoader(
+        # val_set, batch_size=batch_size, shuffle=True
+    # )
 
     model = NeuralNetwork(board_size, HISTORY_LENGTH, n_size, num_layer, dropout).to(DEVICE)
     if DEVICE.type == "cuda":
         model.compile()
+
     loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=learning_rate, weight_decay=weight_decay, fused=True
-    )
+
+    if OPTIMIZER == "Adamw":
+        optimizer = torch.optim.AdamW(
+            model.parameters(), lr=learning_rate, weight_decay=weight_decay, fused=True
+        )
+    elif OPTIMIZER == "SGD":
+        optimizer = torch.optim.SGD(
+            model.parameters(), 
+            lr=learning_rate,
+            momentum=0.9, 
+            weight_decay=weight_decay
+        )
+    else:
+        raise ValueError(f"Unknown optimizer: {OPTIMIZER}")
+
     scaler = torch.amp.GradScaler(DEVICE.type, enabled=GRADSCALER_ENABLED)
     
     scheduler = None
@@ -302,6 +328,7 @@ def train(
         "scheduler_type": scheduler_type,
         "weight_decay": weight_decay,
         "architecture": "CNN+Res Blocks",
+        "optimizer": OPTIMIZER,
         "grad_clipping": False,
     }
     save_config(config, run_name)
@@ -323,9 +350,9 @@ def train(
             torch.save(model.state_dict(), checkpoint_path)
 
         losses_ep, accuracies_ep, accuracies_top3_ep = train_loop(
-            training_generator, model, loss_fn, optimizer, logger, t+1, scaler, scheduler
+            train_set, model, loss_fn, optimizer, logger, t+1, scaler, scheduler
         )
-        val_loss_ep, val_acc_ep, val_acc_top3_ep = validation_loop(val_generator, model, loss_fn, logger, t+1)
+        val_loss_ep, val_acc_ep, val_acc_top3_ep = validation_loop(val_set, model, loss_fn, logger, t+1)
         
         if scheduler_type == "ReduceLROnPlateau":
             scheduler.step(val_loss_ep)
@@ -377,12 +404,12 @@ def main():
     config_space = {
         "num_planes": [96],
         "num_layers": [18],
-        "learning_rates": [0.001],
-        "epochs": [10],
-        "batch_sizes": [512],
-        "dropouts": [0.1],
-        "weight_decays": [1e-3],
-        "scheduler_types": ["ReduceLROnPlateau"]
+        "learning_rates": [1e-1],
+        "epochs": [50],
+        "batch_sizes": [BS],
+        "dropouts": [0.0],
+        "weight_decays": [1e-4],
+        "scheduler_types": ["MultiStepLR"]
     }
 
     combinations = itertools.product(*config_space.values())
