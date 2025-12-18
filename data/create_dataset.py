@@ -22,8 +22,8 @@ def apply_symmetry(input_volume, label, k):
     k: 0-7
     """
     # Create copies to avoid mutating original data
-    vol = input_volume.copy()
-    lbl = label.copy()
+    vol = input_volume
+    lbl = label
 
     if k >= 4:
         # Flip along Height (axis 1 for volume, axis 0 for label)
@@ -64,7 +64,7 @@ def encode_history_planes(game_samples, current_idx, history_len):
             # Assume 9x9 based on current sample or default
             # (Fetching shape from current sample to be safe)
             h, w = game_samples[current_idx][0].shape
-            board_state = np.zeros((h, w), dtype=np.float32)
+            board_state = np.zeros((h, w), dtype=np.int8)
 
         # Generate 2 planes for this time step:
         # 1. My Stones (relative to CURRENT player)
@@ -77,8 +77,8 @@ def encode_history_planes(game_samples, current_idx, history_len):
             my_stones = (board_state == -1.0)
             opp_stones = (board_state == 1.0)
 
-        planes.append(my_stones.astype(np.float32))
-        planes.append(opp_stones.astype(np.float32))
+        planes.append(my_stones.astype(np.int8))
+        planes.append(opp_stones.astype(np.int8))
 
     # Add Color Plane (Last plane)
     # 1.0 if Black to play, 0.0 if White to play
@@ -131,9 +131,9 @@ def get_positions(sgf_paths):
                     flat_label = sym_label.flatten()
                     flat_label = np.append(flat_label, 1 if is_pass else 0)
 
-                    boards.append(torch.tensor(sym_vol, dtype=torch.float32)) # Float for CNN inputs
-                    label_boards.append(torch.tensor(flat_label, dtype=torch.float32))
-                    label_colors.append(torch.tensor(label_color, dtype=torch.float32))
+                    boards.append(torch.tensor(sym_vol, dtype=torch.int8)) # Float for CNN inputs
+                    label_boards.append(torch.tensor(flat_label, dtype=torch.int8))
+                    label_colors.append(torch.tensor(label_color, dtype=torch.int8))
                         
         except Exception as e:
             print(f"Error processing {sgf_path}: {e}")
@@ -155,7 +155,7 @@ def main():
         print(f"Folder {SGF_FOLDER_PATH} not found.")
         return
 
-    sgf_paths = glob(os.path.join(SGF_FOLDER_PATH, "*.sgf"))[:5000]
+    sgf_paths = glob(os.path.join(SGF_FOLDER_PATH, "*.sgf"))
     sgf_count = len(sgf_paths)
     
     if sgf_count == 0:

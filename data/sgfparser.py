@@ -73,10 +73,9 @@ def remove_group(board, row, col):
 
 def get_all_moves(sgf_content):
     """
-    Parse SGF content and return a list of (board, label_board, player_color)
+    Parse SGF content and return a list of (board, label_board, player_color, is_pass)
     for all valid moves in the game.
     """
-    # Parse SGF file to find board size and moves
     board_size = 9
     if 'SZ[' in sgf_content:
         try:
@@ -89,10 +88,7 @@ def get_all_moves(sgf_content):
     board = np.zeros((board_size, board_size), dtype=float)
 
     # Parse moves, assume format ;B[dd];W[pp]...
-    # Split at each move
     raw_moves = sgf_content.split(';')
-    
-    # Filter valid moves
     moves = []
     for move in raw_moves:
         if move.startswith('B[') or move.startswith('W['):
@@ -100,27 +96,50 @@ def get_all_moves(sgf_content):
 
     game_samples = []
 
-    # Iterate through moves to generate states
-    # We need at least one move to have a label
-    for i in range(len(moves) - 1):
-        current_move = moves[i]
-        next_move = moves[i+1]
+    # FIX: Iterate through ALL moves to capture the very first move
+    for i in range(len(moves)):
+        current_move_str = moves[i]
 
-        # 1. Apply current_move to board
-        if current_move.startswith('B['):
-            color = BLACK
-        elif current_move.startswith('W['):
-            color = WHITE
+        # Determine who is playing THIS move (for the label)
+        if current_move_str.startswith('B['):
+            label_color = BLACK
+        elif current_move_str.startswith('W['):
+            label_color = WHITE
         else:
             continue
 
-        pos = current_move[2:4]
-        if len(pos) == 2:  # Valid position
+        # 1. Create the Label (The move we want the network to predict)
+        label_board = np.zeros((board_size, board_size), dtype=int)
+        is_pass = False
+        
+        # Check pass for current move
+        if "W[]" in current_move_str or "B[]" in current_move_str:
+            is_pass = True
+        else:
+            # Extract coordinates from "B[xy]" -> "xy"
+            pos = current_move_str[2:4]
+            assert len(pos) == 2
+            label_row, label_col = parse_position(pos)
+            label_board[label_row, label_col] = 1
+
+        # 2. SAVE STATE BEFORE UPDATING
+        # We save the CURRENT board state and the move that is ABOUT to happen
+        game_samples.append((board.copy(), label_board, label_color, is_pass))
+
+        # 3. Update Board (Apply the move so it's ready for the next step)
+        if not is_pass:
+            # We already parsed row/col for the label, reuse or re-parse
+            # (Re-parsing safely here in case of weird logic flow)
+            pos = current_move_str[2:4]
             row, col = parse_position(pos)
-            board[row, col] = color
             
-            # Handle captures
-            opponent_color = -color
+            # Place Stone
+            board[row, col] = label_color
+            
+            # Handle Captures (Standard Go Rules)
+            opponent_color = -label_color
+            
+            # Check neighbors for opponent captures
             for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
                 nr, nc = row + dr, col + dc
                 if 0 <= nr < board_size and 0 <= nc < board_size:
@@ -128,26 +147,8 @@ def get_all_moves(sgf_content):
                         if count_liberties(board, nr, nc) == 0:
                             remove_group(board, nr, nc)
             
-            # Self-capture check
+            # Check self-capture (Suicide rule)
             if count_liberties(board, row, col) == 0:
                 remove_group(board, row, col)
-
-        # 2. Prepare label from next_move
-        if next_move.startswith('B['):
-            label_color = BLACK
-        elif next_move.startswith('W['):
-            label_color = WHITE
-        else:
-            continue # Skip if next move is invalid
-
-        label_board = np.zeros((board_size, board_size), dtype=int)
-        is_pass = False
-        if check_pass(next_move):
-            is_pass = True
-        else:
-            label_row, label_col = parse_position(next_move[2:4])
-            label_board[label_row, label_col] = 1
-        
-        game_samples.append((board.copy(), label_board, label_color, is_pass))
 
     return game_samples
