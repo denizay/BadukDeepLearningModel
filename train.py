@@ -15,21 +15,28 @@ from tqdm import tqdm
 from dataset import GameDataset
 from model import NeuralNetwork
 
+
 BOARD_SIZE = 9
 DEVICE = torch.device(
     "cuda"
     if torch.cuda.is_available()
     else "mps" if torch.backends.mps.is_available() else "cpu"
 )
+AUTO_CAST_TYPE = torch.bfloat16
+GRADSCALER_ENABLED = AUTO_CAST_TYPE == torch.float16
 LOG_FOLDER = "logs"
 PLOT_FOLDER = "plots"
 CHECKPOINT_FOLDER = "checkpoints"
 CONFIG_FOLDER = "configs"
-TRAIN_DATA_PATH = "data/train_data_bigger.pkl"
+TRAIN_DATA_PATH = "data/validation_data_bigger.pkl"
 VAL_DATA_PATH = "data/validation_data_bigger.pkl"
+MAX_NORM = 2.0
 
-torch.set_float32_matmul_precision('high')
-torch.backends.cudnn.benchmark = True
+
+if DEVICE.type == "cuda":
+    torch.set_float32_matmul_precision('high')
+    torch.backends.cudnn.benchmark = True
+
 
 def setup_logger(log_file_path):
     os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
@@ -65,14 +72,14 @@ def train_loop(dataloader, model, loss_fn, optimizer, logger, epoch, scaler, sch
 
         optimizer.zero_grad(set_to_none=True)
 
-        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+        with torch.amp.autocast(device_type=DEVICE.type, dtype=AUTO_CAST_TYPE):
             pred = model(X)
             loss = loss_fn(pred, y)
 
         scaler.scale(loss).backward()
 
         scaler.unscale_(optimizer)
-
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=MAX_NORM)
 
         if batch % 1000 == 0:
             batch_size = len(X)
@@ -236,12 +243,13 @@ def train(
     )
 
     model = NeuralNetwork(board_size, n_size, num_layer, dropout).to(DEVICE)
-    model.compile()
+    if DEVICE.type == "cuda":
+        model.compile()
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=learning_rate, weight_decay=weight_decay, fused=True
     )
-    scaler = torch.amp.GradScaler('cuda')
+    scaler = torch.amp.GradScaler(DEVICE.type, enabled=GRADSCALER_ENABLED)
     
     scheduler = None
     if scheduler_type == "ReduceLROnPlateau":
@@ -356,13 +364,13 @@ def main():
     val_set = GameDataset(VAL_DATA_PATH, DEVICE, prefetch=True)
 
     config_space = {
-        "num_planes": [64, 96],
-        "num_layers": [12, 18],
+        "num_planes": [96],
+        "num_layers": [18],
         "learning_rates": [0.001],
         "epochs": [10],
-        "batch_sizes": [1024],
-        "dropouts": [0.0, 0.1, 0.2],
-        "weight_decays": [1e-1],
+        "batch_sizes": [512],
+        "dropouts": [0.1],
+        "weight_decays": [1e-3],
         "scheduler_types": ["ReduceLROnPlateau"]
     }
 
