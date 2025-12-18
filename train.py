@@ -8,7 +8,7 @@ from datetime import datetime
 import wandb
 import torch
 from torch import nn
-from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingWarmRestarts, OneCycleLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingWarmRestarts, OneCycleLR, MultiStepLR
 # from matplotlib import pyplot as plt
 from tqdm import tqdm
 
@@ -279,6 +279,14 @@ def train(
             div_factor=25.0,
             final_div_factor=10000.0
         )
+    elif scheduler_type == "MultiStepLR":
+        milestones = [
+            int(epoch * 0.25), 
+            int(epoch * 0.50), 
+            int(epoch * 0.75), 
+            int(epoch * 0.875)
+        ]
+        scheduler = MultiStepLR(optimizer, milestones=milestones, gamma=0.1)
     
     losses, losses_avg, accuracies, accuracies_top3, val_losses, val_accuracies, val_accuracies_top3 = [], [], [], [], [], [], []
 
@@ -322,6 +330,8 @@ def train(
         if scheduler_type == "ReduceLROnPlateau":
             scheduler.step(val_loss_ep)
         elif scheduler_type == "CosineAnnealingWarmRestarts":
+            scheduler.step()
+        elif scheduler_type == "MultiStepLR":
             scheduler.step()
             
         current_lr = optimizer.param_groups[0]['lr']
